@@ -5,10 +5,13 @@ use backend::{
 use dioxus::prelude::*;
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::button::{Button, ButtonKind};
+use crate::components::{
+    button::{Button, ButtonStyle},
+    section::Section,
+};
 
 #[component]
-pub fn Debug() -> Element {
+pub fn DebugScreen() -> Element {
     let mut state = use_signal(DebugState::default);
 
     use_future(move || async move {
@@ -26,70 +29,75 @@ pub fn Debug() -> Element {
     });
 
     rsx! {
-        div { class: "flex flex-col h-full overflow-y-auto scrollbar",
-            Section { name: "Debug",
+        div { class: "flex flex-col h-full overflow-y-auto",
+            Section { title: "Debug",
                 div { class: "grid grid-cols-2 gap-3",
                     Button {
-                        label: "Capture color image",
-                        kind: ButtonKind::Secondary,
+                        style: ButtonStyle::Secondary,
                         on_click: move |_| async {
                             capture_image(false).await;
                         },
+
+                        "Capture color image"
                     }
                     Button {
-                        label: "Capture grayscale image",
-                        kind: ButtonKind::Secondary,
+                        style: ButtonStyle::Secondary,
                         on_click: move |_| async {
                             capture_image(true).await;
                         },
+
+                        "Capture grayscale image"
                     }
                     Button {
-                        label: "Infer rune",
-                        kind: ButtonKind::Secondary,
+                        style: ButtonStyle::Secondary,
                         on_click: move |_| async {
                             infer_rune().await;
                         },
+
+                        "Infer rune"
                     }
                     Button {
-                        label: "Infer minimap",
-                        kind: ButtonKind::Secondary,
+                        style: ButtonStyle::Secondary,
                         on_click: move |_| async {
                             infer_minimap().await;
                         },
+
+                        "Infer minimap"
                     }
                     Button {
-                        label: "Spin rune sandbox test",
-                        kind: ButtonKind::Secondary,
+                        style: ButtonStyle::Secondary,
                         on_click: move |_| async {
                             test_spin_rune().await;
                         },
+
+                        "Spin rune sandbox test"
                     }
                     Button {
-                        label: if state().is_recording { "Stop recording" } else { "Start recording" },
-                        kind: ButtonKind::Secondary,
+                        style: ButtonStyle::Secondary,
                         on_click: move |_| async move {
                             record_images(!state.peek().is_recording).await;
                         },
+
+                        if state().is_recording {
+                            "Stop recording"
+                        } else {
+                            "Start recording"
+                        }
                     }
                     Button {
-                        label: if state().is_rune_auto_saving { "Stop auto saving rune" } else { "Start auto saving rune" },
-                        kind: ButtonKind::Secondary,
+                        style: ButtonStyle::Secondary,
                         on_click: move |_| async move {
                             auto_save_rune(!state.peek().is_rune_auto_saving).await;
                         },
+
+                        if state().is_rune_auto_saving {
+                            "Stop auto saving rune"
+                        } else {
+                            "Start auto saving rune"
+                        }
                     }
                 }
             }
-        }
-    }
-}
-
-#[component]
-fn Section(name: &'static str, children: Element) -> Element {
-    rsx! {
-        div { class: "flex flex-col pr-4 pb-3",
-            div { class: "flex items-center title-xs h-10", {name} }
-            {children}
         }
     }
 }

@@ -5,13 +5,11 @@
 
 use std::{env::current_exe, io::stdout, string::ToString, sync::LazyLock};
 
-use actions::Actions;
-use backend::{
-    Character, Localization as LocalizationData, Minimap as MinimapData, Settings as SettingsData,
-};
-use characters::Characters;
+use actions::ActionsScreen;
+use backend::{Character, Localization, Minimap, Settings};
+use characters::CharactersScreen;
 #[cfg(debug_assertions)]
-use debug::Debug;
+use debug::DebugScreen;
 use dioxus::{
     desktop::{
         WindowBuilder,
@@ -22,29 +20,25 @@ use dioxus::{
 };
 use fern::Dispatch;
 use log::LevelFilter;
-use minimap::Minimap;
-use navigation::Navigation;
+use minimap::MinimapScreen;
+use navigation::NavigationScreen;
 use rand::distr::{Alphanumeric, SampleString};
-use settings::Settings;
+use settings::SettingsScreen;
 
-use crate::localization::Localization;
+use crate::localization::LocalizationScreen;
 
 mod actions;
-mod button;
 mod characters;
+mod components;
 #[cfg(debug_assertions)]
 mod debug;
-mod icons;
-mod inputs;
 mod localization;
 mod minimap;
 mod navigation;
-mod popup;
-mod select;
 mod settings;
 
 const TAILWIND_CSS: Asset = asset!("public/tailwind.css");
-const AUTO_NUMERIC_JS: Asset = asset!("assets/autoNumeric.min.js");
+const AUTO_NUMERIC_JS: Asset = asset!("public/autoNumeric.min.js");
 const TAB_ACTIONS: &str = "Actions";
 const TAB_CHARACTERS: &str = "Characters";
 const TAB_NAVIGATION: &str = "Navigation";
@@ -102,11 +96,11 @@ fn main() {
 
 #[derive(Clone, Copy)]
 pub struct AppState {
-    minimap: Signal<Option<MinimapData>>,
+    minimap: Signal<Option<Minimap>>,
     minimap_preset: Signal<Option<String>>,
     character: Signal<Option<Character>>,
-    settings: Signal<Option<SettingsData>>,
-    localization: Signal<Option<LocalizationData>>,
+    settings: Signal<Option<Settings>>,
+    localization: Signal<Option<Localization>>,
     position: Signal<(i32, i32)>,
 }
 
@@ -146,7 +140,7 @@ fn App() -> Element {
         document::Script { src: AUTO_NUMERIC_JS }
         if script_loaded() {
             div { class: "flex min-w-3xl lg:min-w-5xl min-h-120 h-full",
-                Minimap {}
+                MinimapScreen {}
                 div { class: "flex-grow flex flex-col lg:flex-row z-1",
                     Tabs {
                         tabs: TABS.clone(),
@@ -158,23 +152,23 @@ fn App() -> Element {
                     div { class: "relative w-full h-full overflow-x-hidden overflow-y-auto pl-2 lg:pl-0",
                         match selected_tab().as_str() {
                             TAB_ACTIONS => rsx! {
-                                Actions {}
+                                ActionsScreen {}
                             },
                             TAB_CHARACTERS => rsx! {
-                                Characters {}
+                                CharactersScreen {}
                             },
                             TAB_SETTINGS => rsx! {
-                                Settings {}
+                                SettingsScreen {}
                             },
                             TAB_NAVIGATION => rsx! {
-                                Navigation {}
+                                NavigationScreen {}
                             },
                             TAB_LOCALIZATION => rsx! {
-                                Localization {}
+                                LocalizationScreen {}
                             },
                             #[cfg(debug_assertions)]
                             TAB_DEBUG => rsx! {
-                                Debug {}
+                                DebugScreen {}
                             },
                             _ => unreachable!(),
                         }
@@ -217,15 +211,15 @@ fn Tabs(
 
 #[component]
 fn Tab(name: String, selected: bool, on_click: EventHandler) -> Element {
-    let selected_class = if selected { "bg-gray-900" } else { "" };
+    let selected_class = if selected { "bg-secondary-surface" } else { "" };
 
     rsx! {
         button {
-            class: "flex items-center pl-2 w-32 h-10 {selected_class} hover:bg-gray-900",
+            class: "flex items-center pl-2 w-32 h-10 {selected_class} hover:bg-secondary-surface",
             onclick: move |_| {
                 on_click(());
             },
-            p { class: "title", {name} }
+            p { class: "text-primary-text font-medium", {name} }
         }
     }
 }

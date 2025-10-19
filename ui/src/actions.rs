@@ -18,20 +18,29 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::{
     AppState,
-    button::{Button, ButtonKind},
-    icons::{DownArrowIcon, PositionIcon, UpArrowIcon, XIcon},
-    inputs::{Checkbox, KeyBindingInput, MillisInput, NumberInputI32, NumberInputU32},
-    popup::Popup,
-    select::{EnumSelect, TextSelect},
+    components::{
+        ContentAlign, ContentSide,
+        button::{Button, ButtonStyle},
+        checkbox::Checkbox,
+        icons::{DownArrowIcon, UpArrowIcon, XIcon},
+        key::KeyInput,
+        labeled::Labeled,
+        named_select::NamedSelect,
+        numbers::{MillisInput, PrimitiveIntegerInput},
+        popup::{PopupContent, PopupContext, PopupTrigger},
+        position::PositionInput,
+        section::Section,
+        select::{Select, SelectOption},
+    },
 };
 
 const ITEM_TEXT_CLASS: &str =
     "text-center inline-block pt-1 text-ellipsis overflow-hidden whitespace-nowrap";
-const ITEM_BORDER_CLASS: &str = "border-r-2 border-gray-700";
+const ITEM_BORDER_CLASS: &str = "border-r-2 border-secondary-border";
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
-enum ActionUpdate {
+enum ActionsUpdate {
     Set,
     Create(String),
     Delete,
@@ -39,29 +48,14 @@ enum ActionUpdate {
     UpdateMinimap(Minimap),
 }
 
-#[derive(Clone, Copy, Debug)]
-enum PopupInputKind {
-    Action(ActionInputKind),
-    Bound(Bound),
-    Platform(Platform, Option<usize>),
-}
-
-#[derive(PartialEq, Clone, Copy, Debug)]
-enum ActionInputKind {
-    Add(Action),
-    Edit(Action, usize),
-    PingPongOrAutoMobbing(MobbingKey),
-}
-
-#[derive(Debug)]
-enum ActionInputValueKind {
-    Add(Action, ActionCondition),
-    Edit(Action, usize),
-    PingPongOrAutoMobbing(MobbingKey),
+#[derive(PartialEq, Copy, Clone)]
+struct ActionsContext {
+    minimap: Memo<Minimap>,
+    save_minimap: Callback<Minimap>,
 }
 
 #[component]
-pub fn Actions() -> Element {
+pub fn ActionsScreen() -> Element {
     let mut minimap = use_context::<AppState>().minimap;
     let mut minimap_preset = use_context::<AppState>().minimap_preset;
     // Non-null view of minimap
@@ -92,14 +86,13 @@ pub fn Actions() -> Element {
     });
 
     // Handles async operations for action-related
-    // TODO: Split into functions
-    let coroutine = use_coroutine(move |mut rx: UnboundedReceiver<ActionUpdate>| async move {
+    let coroutine = use_coroutine(move |mut rx: UnboundedReceiver<ActionsUpdate>| async move {
         while let Some(message) = rx.next().await {
             match message {
-                ActionUpdate::Set => {
+                ActionsUpdate::Set => {
                     update_minimap(minimap_preset(), minimap()).await;
                 }
-                ActionUpdate::Create(preset) => {
+                ActionsUpdate::Create(preset) => {
                     let Some(mut current_minimap) = minimap() else {
                         continue;
                     };
@@ -116,7 +109,7 @@ pub fn Actions() -> Element {
                         update_minimap(minimap_preset(), minimap()).await;
                     }
                 }
-                ActionUpdate::Delete => {
+                ActionsUpdate::Delete => {
                     let Some(mut current_minimap) = minimap() else {
                         continue;
                     };
@@ -133,7 +126,7 @@ pub fn Actions() -> Element {
                         update_minimap(minimap_preset(), minimap()).await;
                     }
                 }
-                ActionUpdate::Update(actions) => {
+                ActionsUpdate::Update(actions) => {
                     let Some(mut current_minimap) = minimap() else {
                         continue;
                     };
@@ -146,7 +139,7 @@ pub fn Actions() -> Element {
                         minimap.set(Some(current_minimap));
                     }
                 }
-                ActionUpdate::UpdateMinimap(new_minimap) => {
+                ActionsUpdate::UpdateMinimap(new_minimap) => {
                     if let Some(new_minimap) = upsert_minimap(new_minimap).await {
                         minimap.set(Some(new_minimap));
                     }
@@ -154,49 +147,93 @@ pub fn Actions() -> Element {
             }
         }
     });
-    let mut popup_input_kind = use_signal(|| None);
 
-    // Add/edit action callbacks
-    let add_action = use_callback(move |(action, condition): (Action, ActionCondition)| {
-        let mut actions = minimap_preset_actions();
-        let index = if matches!(action.condition(), ActionCondition::Linked) {
-            find_last_linked_action_index(&actions, condition)
-                .map(|index| index + 1)
-                .unwrap_or(actions.len())
-        } else {
-            actions.len()
-        };
-
-        actions.insert(index, action);
-        coroutine.send(ActionUpdate::Update(actions));
+    let save_minimap = use_callback(move |minimap: Minimap| {
+        coroutine.send(ActionsUpdate::UpdateMinimap(minimap));
     });
-    let edit_action = use_callback(move |(new_action, index): (Action, usize)| {
-        let mut actions = minimap_preset_actions();
-        let Some(action) = actions.get_mut(index) else {
-            return;
-        };
+    let select_preset = use_callback(move |index: usize| {
+        let selected = minimap_presets.peek().get(index).cloned().unwrap();
 
-        *action = new_action;
-        coroutine.send(ActionUpdate::Update(actions));
+        minimap_preset.set(Some(selected));
+        coroutine.send(ActionsUpdate::Set);
     });
-    let copy_action = use_callback(move |kind| match kind {
-        ActionInputKind::Edit(action, _) => {
-            popup_input_kind.set(Some(PopupInputKind::Action(ActionInputKind::Add(action))));
+
+    use_context_provider(|| ActionsContext {
+        minimap: minimap_view,
+        save_minimap,
+    });
+
+    rsx! {
+        div { class: "flex flex-col pb-15 h-full gap-3 overflow-y-auto pr-2",
+            SectionRotation { disabled: minimap().is_none() }
+            SectionPlatforms { disabled: minimap().is_none() }
+            SectionActions {
+                actions: minimap_preset_actions,
+                disabled: minimap().is_none() || minimap_preset().is_none(),
+            }
+            SectionLegends {}
         }
-        ActionInputKind::Add(_) | ActionInputKind::PingPongOrAutoMobbing(_) => {
-            unreachable!()
+
+        div { class: "flex items-center w-full h-10 pr-2 bg-primary-surface absolute bottom-0",
+            NamedSelect {
+                class: "flex-grow",
+                on_create: move |name| {
+                    coroutine.send(ActionsUpdate::Create(name));
+                },
+                on_delete: move |_| {
+                    coroutine.send(ActionsUpdate::Delete);
+                },
+                disabled: minimap().is_none(),
+                delete_disabled: minimap_presets().is_empty(),
+
+                Select::<usize> {
+                    class: "w-full",
+                    placeholder: "Create an actions preset for the selected map...",
+                    disabled: minimap_presets().is_empty(),
+                    on_selected: select_preset,
+
+                    for (i , name) in minimap_presets().into_iter().enumerate() {
+                        SelectOption::<usize> {
+                            value: i,
+                            selected: minimap_preset_index() == Some(i),
+                            label: name,
+                        }
+                    }
+                }
+            }
         }
+    }
+}
+
+#[component]
+fn SectionRotation(disabled: bool) -> Element {
+    #[derive(Clone, Copy, PartialEq)]
+    enum PopupContent {
+        None,
+        Bound(Bound),
+        Key(MobbingKey),
+    }
+
+    let context = use_context::<ActionsContext>();
+    let minimap = context.minimap;
+    let save_minimap = context.save_minimap;
+
+    let update_mobbing_button_disabled = use_memo(move || {
+        !matches!(
+            minimap().rotation_mode,
+            RotationMode::AutoMobbing | RotationMode::PingPong
+        )
     });
 
-    // Edit mobbing key/bound callbacks
-    let edit_mobbing_key = use_callback(move |key| {
-        let mut minimap = minimap_view();
-
-        minimap.rotation_mobbing_key = key;
-        coroutine.send(ActionUpdate::UpdateMinimap(minimap));
+    let edit_mobbing_key = use_callback(move |rotation_mobbing_key| {
+        save_minimap(Minimap {
+            rotation_mobbing_key,
+            ..minimap()
+        });
     });
+
     let edit_mobbing_bound = use_callback(move |bound| {
-        let mut minimap = minimap_view();
+        let mut minimap = minimap();
 
         match minimap.rotation_mode {
             RotationMode::StartToEnd | RotationMode::StartToEndThenReverse => return,
@@ -207,268 +244,157 @@ pub fn Actions() -> Element {
                 minimap.rotation_ping_pong_bound = bound;
             }
         };
-        coroutine.send(ActionUpdate::UpdateMinimap(minimap));
+        save_minimap(minimap);
     });
 
-    //Add, edit platform callbacks
-    let add_platform = use_callback(move |platform| {
-        let mut minimap = minimap_view();
-
-        minimap.platforms.push(platform);
-        coroutine.send(ActionUpdate::UpdateMinimap(minimap));
-    });
-    let edit_platform = use_callback(move |(new_platform, index): (Platform, usize)| {
-        let mut minimap = minimap_view();
-        let Some(platform) = minimap.platforms.get_mut(index) else {
-            return;
-        };
-
-        *platform = new_platform;
-        coroutine.send(ActionUpdate::UpdateMinimap(minimap));
-    });
+    let mut popup_content = use_signal(|| PopupContent::None);
+    let mut popup_open = use_signal(|| false);
 
     rsx! {
-        div { class: "flex flex-col pb-15 h-full gap-3 overflow-y-auto scrollbar pr-2",
-            SectionRotation {
-                popup_input_kind,
-                minimap_view,
-                disabled: minimap().is_none(),
-            }
-            SectionPlatforms {
-                popup_input_kind,
-                minimap_view,
-                disabled: minimap().is_none(),
-            }
-            SectionActions {
-                popup_input_kind,
-                minimap_preset_actions,
-                disabled: minimap().is_none() || minimap_preset().is_none(),
-            }
-            SectionLegends {}
-        }
-        if let Some(kind) = popup_input_kind() {
-            match kind {
-                PopupInputKind::Action(kind) => rsx! {
-                    PopupActionInput {
-                        actions: minimap_preset_actions,
-                        on_copy: move |_| {
-                            copy_action(kind);
+        PopupContext {
+            open: popup_open,
+            on_open: move |open: bool| {
+                popup_open.set(open);
+            },
+            Section { title: "Rotation",
+                div { class: "grid grid-cols-2 gap-3",
+                    ActionsSelect::<RotationMode> {
+                        label: "Mode",
+                        disabled,
+                        on_selected: move |rotation_mode| {
+                            save_minimap(Minimap {
+                                rotation_mode,
+                                ..minimap.peek().clone()
+                            })
                         },
-                        on_cancel: move |_| {
-                            popup_input_kind.take();
-                        },
-                        on_value: move |kind| {
-                            popup_input_kind.take();
-                            match kind {
-                                ActionInputValueKind::Add(action, condition) => {
-                                    add_action((action, condition));
-                                }
-                                ActionInputValueKind::Edit(action, index) => {
-                                    edit_action((action, index));
-                                }
-                                ActionInputValueKind::PingPongOrAutoMobbing(key) => {
-                                    edit_mobbing_key(key);
-                                }
-                            }
-                        },
-                        kind,
+                        selected: minimap().rotation_mode,
                     }
-                },
-                PopupInputKind::Bound(bound) => rsx! {
-                    PopupBoundInput {
+                    div {}
+                    PopupTrigger {
+                        Button {
+                            style: ButtonStyle::Primary,
+                            class: "w-full",
+                            disabled: disabled | update_mobbing_button_disabled(),
+                            on_click: move |_| {
+                                let minimap = minimap.peek();
+                                let key = match minimap.rotation_mode {
+                                    RotationMode::StartToEnd | RotationMode::StartToEndThenReverse => {
+                                        unreachable!()
+                                    }
+                                    RotationMode::AutoMobbing | RotationMode::PingPong => {
+                                        minimap.rotation_mobbing_key
+                                    }
+                                };
+                                popup_content.set(PopupContent::Key(key));
+                            },
+
+                            "Update mobbing key"
+                        }
+                    }
+                    PopupTrigger {
+                        Button {
+                            style: ButtonStyle::Primary,
+                            class: "w-full",
+                            disabled: disabled || update_mobbing_button_disabled(),
+                            on_click: move |_| {
+                                let minimap = minimap.peek();
+                                let bound = match minimap.rotation_mode {
+                                    RotationMode::StartToEnd | RotationMode::StartToEndThenReverse => {
+                                        unreachable!()
+                                    }
+                                    RotationMode::AutoMobbing => minimap.rotation_auto_mob_bound,
+                                    RotationMode::PingPong => minimap.rotation_ping_pong_bound,
+                                };
+                                popup_content.set(PopupContent::Bound(bound));
+                            },
+
+                            "Update mobbing bound"
+                        }
+                    }
+                    ActionsCheckbox {
+                        label: "Auto mobbing uses key when pathing",
+                        tooltip: "Pathing means when the player is moving from one quad to another.",
+                        disabled,
+                        on_checked: move |auto_mob_use_key_when_pathing| {
+                            save_minimap(Minimap {
+                                auto_mob_use_key_when_pathing,
+                                ..minimap.peek().clone()
+                            })
+                        },
+                        checked: minimap().auto_mob_use_key_when_pathing,
+                    }
+                    ActionsMillisInput {
+                        label: "Detect mobs when pathing every",
+                        disabled,
+                        on_value: move |auto_mob_use_key_when_pathing_update_millis| {
+                            save_minimap(Minimap {
+                                auto_mob_use_key_when_pathing_update_millis,
+                                ..minimap.peek().clone()
+                            })
+                        },
+                        value: minimap().auto_mob_use_key_when_pathing_update_millis,
+                    }
+                    ActionsCheckbox {
+                        label: "Reset normal actions on Erda Shower resets",
+                        disabled,
+                        on_checked: move |actions_any_reset_on_erda_condition| {
+                            save_minimap(Minimap {
+                                actions_any_reset_on_erda_condition,
+                                ..minimap.peek().clone()
+                            })
+                        },
+                        checked: minimap().actions_any_reset_on_erda_condition,
+                    }
+                }
+            }
+
+            match popup_content() {
+                PopupContent::None => rsx! {},
+                PopupContent::Bound(bound) => rsx! {
+                    PopupMobbingBoundInputContent {
                         on_cancel: move |_| {
-                            popup_input_kind.take();
+                            popup_open.set(false);
                         },
                         on_value: move |bound| {
-                            popup_input_kind.take();
                             edit_mobbing_bound(bound);
+                            popup_open.set(false);
                         },
                         value: bound,
                     }
                 },
-                PopupInputKind::Platform(platform, index) => {
-                    rsx! {
-                        PopupPlatformInput {
-                            index,
-                            on_cancel: move |_| {
-                                popup_input_kind.take();
-                            },
-                            on_value: move |(mut platform, index): (Platform, Option<usize>)| {
-                                popup_input_kind.take();
-                                update_valid_platform_end(&mut platform);
-                                if let Some(index) = index {
-                                    edit_platform((platform, index));
-                                } else {
-                                    add_platform(platform);
-                                }
-                            },
-                            value: platform,
-                        }
+                PopupContent::Key(key) => rsx! {
+                    PopupMobbingKeyInputContent {
+                        on_cancel: move |_| {
+                            popup_open.set(false);
+                        },
+                        on_value: move |key| {
+                            edit_mobbing_key(key);
+                            popup_open.set(false);
+                        },
+                        value: key,
                     }
-                }
-            }
-        }
-        div { class: "flex items-center w-full h-10 pr-2 bg-gray-950 absolute bottom-0",
-            TextSelect {
-                class: "flex-grow",
-                options: minimap_presets(),
-                disabled: minimap().is_none(),
-                placeholder: "Create an actions preset for the selected map...",
-                on_create: move |name| {
-                    coroutine.send(ActionUpdate::Create(name));
                 },
-                on_delete: move |_| {
-                    coroutine.send(ActionUpdate::Delete);
-                },
-                on_select: move |(_, preset)| {
-                    minimap_preset.set(Some(preset));
-                    coroutine.send(ActionUpdate::Set);
-                },
-                selected: minimap_preset_index(),
             }
         }
     }
 }
 
 #[component]
-fn Section(
-    name: String,
-    #[props(default = String::default())] class: String,
-    children: Element,
-) -> Element {
-    rsx! {
-        div { class: "flex flex-col gap-2 {class}",
-            div { class: "flex flex-none items-center title-xs h-10", {name} }
-            {children}
-        }
-    }
-}
-
-#[component]
-fn SectionRotation(
-    popup_input_kind: Signal<Option<PopupInputKind>>,
-    minimap_view: Memo<Minimap>,
-    disabled: bool,
-) -> Element {
-    let update_mobbing_button_disabled = use_memo(move || {
-        !matches!(
-            minimap_view().rotation_mode,
-            RotationMode::AutoMobbing | RotationMode::PingPong
-        )
-    });
-    let coroutine = use_coroutine_handle::<ActionUpdate>();
-    let save_minimap = use_callback(move |new_minimap: Minimap| {
-        coroutine.send(ActionUpdate::UpdateMinimap(new_minimap));
-    });
-
-    rsx! {
-        Section { name: "Rotation",
-            div { class: "grid grid-cols-2 gap-3",
-                ActionsSelect::<RotationMode> {
-                    label: "Mode",
-                    disabled,
-                    on_select: move |rotation_mode| {
-                        save_minimap(Minimap {
-                            rotation_mode,
-                            ..minimap_view.peek().clone()
-                        })
-                    },
-                    selected: minimap_view().rotation_mode,
-                }
-                div {}
-                Button {
-                    label: "Update mobbing key",
-                    kind: ButtonKind::Primary,
-                    disabled: disabled | update_mobbing_button_disabled(),
-                    on_click: move |_| {
-                        let minimap = minimap_view.peek();
-                        let key = match minimap.rotation_mode {
-                            RotationMode::StartToEnd | RotationMode::StartToEndThenReverse => {
-                                unreachable!()
-                            }
-                            RotationMode::AutoMobbing | RotationMode::PingPong => {
-                                minimap.rotation_mobbing_key
-                            }
-                        };
-                        let kind = ActionInputKind::PingPongOrAutoMobbing(key);
-                        popup_input_kind.set(Some(PopupInputKind::Action(kind)));
-                    },
-                }
-                Button {
-                    label: "Update mobbing bound",
-                    kind: ButtonKind::Primary,
-                    disabled: disabled | update_mobbing_button_disabled(),
-                    on_click: move |_| {
-                        let minimap = minimap_view.peek();
-                        let bound = match minimap.rotation_mode {
-                            RotationMode::StartToEnd | RotationMode::StartToEndThenReverse => {
-                                unreachable!()
-                            }
-                            RotationMode::AutoMobbing => minimap.rotation_auto_mob_bound,
-                            RotationMode::PingPong => minimap.rotation_ping_pong_bound,
-                        };
-                        popup_input_kind.set(Some(PopupInputKind::Bound(bound)));
-                    },
-                }
-                ActionsCheckbox {
-                    label: "Auto mobbing uses key when pathing",
-                    disabled,
-                    on_value: move |auto_mob_use_key_when_pathing| {
-                        save_minimap(Minimap {
-                            auto_mob_use_key_when_pathing,
-                            ..minimap_view.peek().clone()
-                        })
-                    },
-                    value: minimap_view().auto_mob_use_key_when_pathing,
-                }
-                ActionsMillisInput {
-                    label: "Detect mobs when pathing every",
-                    disabled,
-                    on_value: move |auto_mob_use_key_when_pathing_update_millis| {
-                        save_minimap(Minimap {
-                            auto_mob_use_key_when_pathing_update_millis,
-                            ..minimap_view.peek().clone()
-                        })
-                    },
-                    value: minimap_view().auto_mob_use_key_when_pathing_update_millis,
-                }
-                ActionsCheckbox {
-                    label: "Reset normal actions on Erda Shower resets",
-                    disabled,
-                    on_value: move |actions_any_reset_on_erda_condition| {
-                        save_minimap(Minimap {
-                            actions_any_reset_on_erda_condition,
-                            ..minimap_view.peek().clone()
-                        })
-                    },
-                    value: minimap_view().actions_any_reset_on_erda_condition,
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn SectionPlatforms(
-    popup_input_kind: Signal<Option<PopupInputKind>>,
-    minimap_view: Memo<Minimap>,
-    disabled: bool,
-) -> Element {
+fn SectionPlatforms(disabled: bool) -> Element {
     #[component]
     fn PlatformItem(
         platform: Platform,
-        on_item_click: EventHandler,
-        on_item_delete: EventHandler,
+        on_item_click: Callback,
+        on_item_delete: Callback,
     ) -> Element {
         const ICON_CONTAINER_CLASS: &str = "w-4 h-6 flex justify-center items-center";
-        const ICON_CLASS: &str = "w-[11px] h-[11px] fill-current";
+        const ICON_CLASS: &str = "size-3";
 
         rsx! {
-            div { class: "relative group",
+            div { class: "flex group",
                 div {
-                    class: "grid grid-cols-2 h-6 paragraph-xs gap-2 !text-gray-400 group-hover:bg-gray-900",
-                    onclick: move |e| {
-                        e.stop_propagation();
+                    class: "flex-grow grid grid-cols-2 h-6 text-xxs gap-2 text-secondary-text group-hover:bg-secondary-surface",
+                    onclick: move |_| {
                         on_item_click(());
                     },
                     div { class: "{ITEM_BORDER_CLASS} {ITEM_TEXT_CLASS}",
@@ -476,40 +402,59 @@ fn SectionPlatforms(
                     }
                     div { class: "{ITEM_TEXT_CLASS}", {format!("Y / {}", platform.y)} }
                 }
-                div { class: "absolute invisible group-hover:visible top-0 right-1 flex",
+                div { class: "self-stretch invisible group-hover:visible group-hover:bg-secondary-surface flex items-center pr-1",
                     div {
                         class: ICON_CONTAINER_CLASS,
                         onclick: move |e| {
                             e.stop_propagation();
                             on_item_delete(());
                         },
-                        XIcon { class: "{ICON_CLASS} text-red-500" }
+                        XIcon { class: "{ICON_CLASS}" }
                     }
                 }
             }
         }
     }
 
-    let coroutine = use_coroutine_handle::<ActionUpdate>();
+    #[derive(PartialEq, Clone, Copy)]
+    enum PopupContent {
+        None,
+        Edit { platform: Platform, index: usize },
+        Add,
+    }
+
+    let coroutine = use_coroutine_handle::<ActionsUpdate>();
     let settings = use_context::<AppState>().settings;
     let position = use_context::<AppState>().position;
+    let context = use_context::<ActionsContext>();
 
-    // TODO: Group with add_platform in Actions
+    let minimap = context.minimap;
+    let save_minimap = context.save_minimap;
+
     let add_platform = use_callback(move |platform| {
-        let mut minimap = minimap_view();
+        let mut minimap = minimap();
 
         minimap.platforms.push(platform);
-        coroutine.send(ActionUpdate::UpdateMinimap(minimap));
+        coroutine.send(ActionsUpdate::UpdateMinimap(minimap));
+    });
+    let edit_platform = use_callback(move |(new_platform, index): (Platform, usize)| {
+        let mut minimap = minimap();
+        let Some(platform) = minimap.platforms.get_mut(index) else {
+            return;
+        };
+
+        *platform = new_platform;
+        coroutine.send(ActionsUpdate::UpdateMinimap(minimap));
     });
     let delete_platform = use_callback(move |index| {
-        let mut minimap = minimap_view();
+        let mut minimap = minimap();
 
         minimap.platforms.remove(index);
-        coroutine.send(ActionUpdate::UpdateMinimap(minimap));
+        coroutine.send(ActionsUpdate::UpdateMinimap(minimap));
     });
-    let save_minimap = use_callback(move |new_minimap: Minimap| {
-        coroutine.send(ActionUpdate::UpdateMinimap(new_minimap));
-    });
+
+    let mut popup_content = use_signal(|| PopupContent::None);
+    let mut popup_open = use_signal(|| false);
 
     use_future(move || async move {
         let mut platform = Platform::default();
@@ -547,88 +492,128 @@ fn SectionPlatforms(
     });
 
     rsx! {
-        Section { name: "Platforms",
-            div { class: "grid grid-cols-3 gap-3",
-                ActionsCheckbox {
-                    label: "Rune pathing",
-                    disabled,
-                    on_value: move |rune_platforms_pathing| {
-                        save_minimap(Minimap {
-                            rune_platforms_pathing,
-                            ..minimap_view.peek().clone()
-                        })
-                    },
-                    value: minimap_view().rune_platforms_pathing,
+        PopupContext {
+            open: popup_open,
+            on_open: move |open: bool| {
+                popup_open.set(open);
+            },
+            Section { title: "Platforms",
+                div { class: "grid grid-cols-3 gap-3",
+                    ActionsCheckbox {
+                        label: "Rune pathing",
+                        disabled,
+                        on_checked: move |rune_platforms_pathing| {
+                            save_minimap(Minimap {
+                                rune_platforms_pathing,
+                                ..minimap.peek().clone()
+                            })
+                        },
+                        checked: minimap().rune_platforms_pathing,
+                    }
+                    ActionsCheckbox {
+                        label: "Up jump only",
+                        disabled: disabled || !minimap().rune_platforms_pathing,
+                        on_checked: move |rune_platforms_pathing_up_jump_only| {
+                            save_minimap(Minimap {
+                                rune_platforms_pathing_up_jump_only,
+                                ..minimap.peek().clone()
+                            })
+                        },
+                        checked: minimap().rune_platforms_pathing_up_jump_only,
+                    }
+                    div {}
+                    ActionsCheckbox {
+                        label: "Auto-mobbing pathing",
+                        disabled,
+                        on_checked: move |auto_mob_platforms_pathing| {
+                            save_minimap(Minimap {
+                                auto_mob_platforms_pathing,
+                                ..minimap.peek().clone()
+                            })
+                        },
+                        checked: minimap().auto_mob_platforms_pathing,
+                    }
+                    ActionsCheckbox {
+                        label: "Up jump only",
+                        disabled: disabled || !minimap().auto_mob_platforms_pathing,
+                        on_checked: move |auto_mob_platforms_pathing_up_jump_only| {
+                            save_minimap(Minimap {
+                                auto_mob_platforms_pathing_up_jump_only,
+                                ..minimap.peek().clone()
+                            })
+                        },
+                        checked: minimap().auto_mob_platforms_pathing_up_jump_only,
+                    }
+                    ActionsCheckbox {
+                        label: "Bound by platforms",
+                        tooltip: "Auto-mobbing bound is computed based on the provided platforms instead of the provided bound.",
+                        disabled,
+                        on_checked: move |auto_mob_platforms_bound| {
+                            save_minimap(Minimap {
+                                auto_mob_platforms_bound,
+                                ..minimap.peek().clone()
+                            })
+                        },
+                        checked: minimap().auto_mob_platforms_bound,
+                    }
                 }
-                ActionsCheckbox {
-                    label: "Up jump only",
-                    disabled: disabled || !minimap_view().rune_platforms_pathing,
-                    on_value: move |rune_platforms_pathing_up_jump_only| {
-                        save_minimap(Minimap {
-                            rune_platforms_pathing_up_jump_only,
-                            ..minimap_view.peek().clone()
-                        })
-                    },
-                    value: minimap_view().rune_platforms_pathing_up_jump_only,
+                if !minimap().platforms.is_empty() {
+                    div { class: "mt-2" }
                 }
-                div {}
-                ActionsCheckbox {
-                    label: "Auto-mobbing pathing",
-                    disabled,
-                    on_value: move |auto_mob_platforms_pathing| {
-                        save_minimap(Minimap {
-                            auto_mob_platforms_pathing,
-                            ..minimap_view.peek().clone()
-                        })
-                    },
-                    value: minimap_view().auto_mob_platforms_pathing,
+                for (index , platform) in minimap().platforms.into_iter().enumerate() {
+                    PopupTrigger {
+                        PlatformItem {
+                            platform,
+                            on_item_click: move |_| {
+                                popup_content
+                                    .set(PopupContent::Edit {
+                                        platform,
+                                        index,
+                                    });
+                            },
+                            on_item_delete: move |_| {
+                                delete_platform(index);
+                            },
+                        }
+                    }
                 }
-                ActionsCheckbox {
-                    label: "Up jump only",
-                    disabled: disabled || !minimap_view().auto_mob_platforms_pathing,
-                    on_value: move |auto_mob_platforms_pathing_up_jump_only| {
-                        save_minimap(Minimap {
-                            auto_mob_platforms_pathing_up_jump_only,
-                            ..minimap_view.peek().clone()
-                        })
-                    },
-                    value: minimap_view().auto_mob_platforms_pathing_up_jump_only,
+
+                PopupTrigger {
+                    Button {
+                        style: ButtonStyle::Secondary,
+                        on_click: move |_| {
+                            popup_content.set(PopupContent::Add);
+                        },
+                        disabled,
+                        class: "mt-2 w-full",
+
+                        "Add platform"
+                    }
                 }
-                ActionsCheckbox {
-                    label: "Bound by platforms",
-                    disabled,
-                    on_value: move |auto_mob_platforms_bound| {
-                        save_minimap(Minimap {
-                            auto_mob_platforms_bound,
-                            ..minimap_view.peek().clone()
-                        })
+
+                PopupPlatformInputContent {
+                    modifying: match popup_content() {
+                        PopupContent::None | PopupContent::Add => false,
+                        PopupContent::Edit { .. } => true,
                     },
-                    value: minimap_view().auto_mob_platforms_bound,
-                }
-            }
-            if !minimap_view().platforms.is_empty() {
-                div { class: "mt-2" }
-            }
-            for (index , platform) in minimap_view().platforms.into_iter().enumerate() {
-                PlatformItem {
-                    platform,
-                    on_item_click: move |_| {
-                        popup_input_kind.set(Some(PopupInputKind::Platform(platform, Some(index))));
+                    on_cancel: move |_| {
+                        popup_open.set(false);
                     },
-                    on_item_delete: move |_| {
-                        delete_platform(index);
+                    on_value: move |mut platform| {
+                        update_valid_platform_end(&mut platform);
+                        let content = *popup_content.peek();
+                        match content {
+                            PopupContent::None => unreachable!(),
+                            PopupContent::Add => add_platform(platform),
+                            PopupContent::Edit { index, .. } => edit_platform((platform, index)),
+                        }
+                        popup_open.set(false);
+                    },
+                    value: match popup_content() {
+                        PopupContent::None | PopupContent::Add => Platform::default(),
+                        PopupContent::Edit { platform, .. } => platform,
                     },
                 }
-            }
-            Button {
-                label: "Add platform",
-                kind: ButtonKind::Secondary,
-                on_click: move |_| {
-                    let kind = PopupInputKind::Platform(Platform::default(), None);
-                    popup_input_kind.set(Some(kind));
-                },
-                disabled,
-                class: "label mt-2",
             }
         }
     }
@@ -637,7 +622,7 @@ fn SectionPlatforms(
 #[component]
 fn SectionLegends() -> Element {
     rsx! {
-        Section { name: "Action legends", class: "paragraph-xs",
+        Section { title: "Action legends", class: "text-xs text-primary-text",
             p { "⟳ - Repeat" }
             p { "⏱︎  - Wait" }
             p { "ㄨ - No position" }
@@ -655,16 +640,15 @@ fn SectionLegends() -> Element {
 }
 
 #[component]
-fn SectionActions(
-    popup_input_kind: Signal<Option<PopupInputKind>>,
-    minimap_preset_actions: Memo<Vec<Action>>,
-    disabled: bool,
-) -> Element {
-    let coroutine = use_coroutine_handle::<ActionUpdate>();
-    let mut popup_input = move |action_input_kind| {
-        let popup_kind = PopupInputKind::Action(action_input_kind);
-        popup_input_kind.set(Some(popup_kind));
-    };
+fn SectionActions(actions: Memo<Vec<Action>>, disabled: bool) -> Element {
+    #[derive(Clone, Copy, PartialEq)]
+    enum PopupContent {
+        None,
+        Add(Action),
+        Edit { action: Action, index: usize },
+    }
+
+    let coroutine = use_coroutine_handle::<ActionsUpdate>();
 
     let export_element_id = use_memo(|| Alphanumeric.sample_string(&mut rand::rng(), 8));
     let export = use_callback(move |_| {
@@ -683,7 +667,7 @@ fn SectionActions(
             export_element_id(),
         );
         let eval = document::eval(js.as_str());
-        let Ok(json) = serde_json::to_string_pretty(&*minimap_preset_actions.peek()) else {
+        let Ok(json) = serde_json::to_string_pretty(&*actions.peek()) else {
             return;
         };
         let _ = eval.send(json);
@@ -704,7 +688,7 @@ fn SectionActions(
         document::eval(js.as_str());
     });
     let import_actions = use_callback(move |files| {
-        let mut actions = minimap_preset_actions();
+        let mut actions = actions();
 
         for file in files {
             let Ok(file) = File::open(file) else {
@@ -733,11 +717,35 @@ fn SectionActions(
             }
         }
 
-        coroutine.send(ActionUpdate::Update(actions));
+        coroutine.send(ActionsUpdate::Update(actions));
+    });
+
+    let add_action = use_callback(move |(action, condition): (Action, ActionCondition)| {
+        let mut actions = actions();
+        let index = if matches!(action.condition(), ActionCondition::Linked) {
+            find_last_linked_action_index(&actions, condition)
+                .map(|index| index + 1)
+                .unwrap_or(actions.len())
+        } else {
+            actions.len()
+        };
+
+        actions.insert(index, action);
+        coroutine.send(ActionsUpdate::Update(actions));
+    });
+
+    let edit_action = use_callback(move |(new_action, index): (Action, usize)| {
+        let mut actions = actions();
+        let Some(action) = actions.get_mut(index) else {
+            return;
+        };
+
+        *action = new_action;
+        coroutine.send(ActionsUpdate::Update(actions));
     });
 
     let delete_action = use_callback(move |index: usize| {
-        let mut actions = minimap_preset_actions();
+        let mut actions = actions();
         let Some(condition) = actions.get(index).map(|action| action.condition()) else {
             return;
         };
@@ -750,11 +758,12 @@ fn SectionActions(
             actions[index + 1] = actions[index + 1].with_condition(condition);
         }
         actions.remove(index);
-        coroutine.send(ActionUpdate::Update(actions));
+        coroutine.send(ActionsUpdate::Update(actions));
     });
+
     let move_action = use_callback(
         move |(index, condition, up): (usize, ActionCondition, bool)| {
-            let mut actions = minimap_preset_actions();
+            let mut actions = actions();
             let filtered = filter_actions(actions.clone(), condition);
             if (up && index <= filtered.first().expect("cannot be empty").1)
                 || (!up && index >= filtered.last().expect("cannot be empty").1)
@@ -784,7 +793,7 @@ fn SectionActions(
                 // Simple case - swapping two linked actions
                 (ActionCondition::Linked, ActionCondition::Linked) => {
                     actions.swap(index, filtered[filtered_index].1);
-                    coroutine.send(ActionUpdate::Update(actions));
+                    coroutine.send(ActionsUpdate::Update(actions));
                     return;
                 }
                 // Disallows moving up/down if `index` is a linked action and
@@ -847,199 +856,241 @@ fn SectionActions(
             for action in second_actions.into_iter().rev() {
                 actions.insert(first_start, action);
             }
-            coroutine.send(ActionUpdate::Update(actions));
+            coroutine.send(ActionsUpdate::Update(actions));
         },
     );
 
+    let mut popup_content = use_signal(|| PopupContent::None);
+    let mut popup_open = use_signal(|| false);
+
+    let mut handle_add_action_click = move |condition: ActionCondition| {
+        let action = Action::Key(ActionKey::default()).with_condition(condition);
+        let content = PopupContent::Add(action);
+        popup_content.set(content);
+    };
+
+    let mut handle_edit_action_click = move |action: Action, index: usize| {
+        popup_content.set(PopupContent::Edit { action, index });
+    };
+
     rsx! {
-        Section { name: "Normal actions",
-            ActionList {
-                on_add_click: move |_| {
-                    popup_input(ActionInputKind::Add(Action::Key(ActionKey::default())));
-                },
-                on_item_click: move |(action, index)| {
-                    popup_input(ActionInputKind::Edit(action, index));
-                },
-                on_item_move: move |(index, condition, up)| {
-                    move_action((index, condition, up));
-                },
-                on_item_delete: move |index| {
-                    delete_action(index);
-                },
-                condition_filter: ActionCondition::Any,
-                disabled,
-                actions: minimap_preset_actions(),
+        PopupContext {
+            open: popup_open,
+            on_open: move |open: bool| {
+                popup_open.set(open);
+            },
+            Section { title: "Normal actions",
+                ActionList {
+                    on_add_click: move |_| {
+                        handle_add_action_click(ActionCondition::Any);
+                    },
+                    on_item_click: move |(action, index)| {
+                        handle_edit_action_click(action, index);
+                    },
+                    on_item_move: move |(index, condition, up)| {
+                        move_action((index, condition, up));
+                    },
+                    on_item_delete: move |index| {
+                        delete_action(index);
+                    },
+                    condition_filter: ActionCondition::Any,
+                    disabled,
+                    actions: actions(),
+                }
             }
-        }
-        Section { name: "Erda Shower off cooldown priority actions",
-            ActionList {
-                on_add_click: move |_| {
-                    let action = Action::Key(ActionKey {
-                        condition: ActionCondition::ErdaShowerOffCooldown,
-                        ..ActionKey::default()
-                    });
-                    popup_input(ActionInputKind::Add(action));
-                },
-                on_item_click: move |(action, index)| {
-                    popup_input(ActionInputKind::Edit(action, index));
-                },
-                on_item_move: move |(index, condition, up)| {
-                    move_action((index, condition, up));
-                },
-                on_item_delete: move |index| {
-                    delete_action(index);
-                },
-                condition_filter: ActionCondition::ErdaShowerOffCooldown,
-                disabled,
-                actions: minimap_preset_actions(),
+            Section { title: "Erda Shower off cooldown priority actions",
+                ActionList {
+                    on_add_click: move |_| {
+                        handle_add_action_click(ActionCondition::ErdaShowerOffCooldown);
+                    },
+                    on_item_click: move |(action, index)| {
+                        handle_edit_action_click(action, index);
+                    },
+                    on_item_move: move |(index, condition, up)| {
+                        move_action((index, condition, up));
+                    },
+                    on_item_delete: move |index| {
+                        delete_action(index);
+                    },
+                    condition_filter: ActionCondition::ErdaShowerOffCooldown,
+                    disabled,
+                    actions: actions(),
+                }
             }
-        }
-        Section { name: "Every milliseconds priority actions",
-            ActionList {
-                on_add_click: move |_| {
-                    let action = Action::Key(ActionKey {
-                        condition: ActionCondition::EveryMillis(0),
-                        ..ActionKey::default()
-                    });
-                    popup_input(ActionInputKind::Add(action));
-                },
-                on_item_click: move |(action, index)| {
-                    popup_input(ActionInputKind::Edit(action, index));
-                },
-                on_item_move: move |(index, condition, up)| {
-                    move_action((index, condition, up));
-                },
-                on_item_delete: move |index| {
-                    delete_action(index);
-                },
-                condition_filter: ActionCondition::EveryMillis(0),
-                disabled,
-                actions: minimap_preset_actions(),
+            Section { title: "Every milliseconds priority actions",
+                ActionList {
+                    on_add_click: move |_| {
+                        handle_add_action_click(ActionCondition::EveryMillis(0));
+                    },
+                    on_item_click: move |(action, index)| {
+                        handle_edit_action_click(action, index);
+                    },
+                    on_item_move: move |(index, condition, up)| {
+                        move_action((index, condition, up));
+                    },
+                    on_item_delete: move |index| {
+                        delete_action(index);
+                    },
+                    condition_filter: ActionCondition::EveryMillis(0),
+                    disabled,
+                    actions: actions(),
+                }
             }
-        }
-        Section { name: "Import/export actions",
-            div { class: "flex gap-2",
-                div { class: "flex-grow",
-                    a { id: export_element_id(), class: "w-0 h-0 invisible" }
-                    Button {
-                        class: "w-full",
-                        label: "Export",
-                        kind: ButtonKind::Primary,
-                        disabled,
-                        on_click: move |_| {
-                            export(());
-                        },
+            Section { title: "Import/export actions",
+                div { class: "flex gap-2",
+                    div { class: "flex-grow",
+                        a {
+                            id: export_element_id(),
+                            class: "w-0 h-0 invisible",
+                        }
+                        Button {
+                            class: "w-full",
+                            style: ButtonStyle::Primary,
+                            disabled,
+                            on_click: move |_| {
+                                export(());
+                            },
+                            "Export"
+                        }
+                    }
+                    div { class: "flex-grow",
+                        input {
+                            id: import_element_id(),
+                            class: "w-0 h-0 invisible",
+                            r#type: "file",
+                            accept: ".json",
+                            name: "Actions JSON",
+                            onchange: move |e| {
+                                if let Some(files) = e.data.files().map(|engine| engine.files()) {
+                                    import_actions(files);
+                                }
+                            },
+                        }
+                        Button {
+                            class: "w-full",
+                            style: ButtonStyle::Primary,
+                            disabled,
+                            on_click: move |_| {
+                                import(());
+                            },
+                            "Import"
+                        }
                     }
                 }
-                div { class: "flex-grow",
-                    input {
-                        id: import_element_id(),
-                        class: "w-0 h-0 invisible",
-                        r#type: "file",
-                        accept: ".json",
-                        name: "Actions JSON",
-                        onchange: move |e| {
-                            if let Some(files) = e.data.files().map(|engine| engine.files()) {
-                                import_actions(files);
-                            }
+            }
+
+            match popup_content() {
+                PopupContent::None => rsx! {},
+                PopupContent::Add(action) => rsx! {
+                    PopupActionInputContent {
+                        modifying: false,
+                        linkable: !filter_actions(actions(), action.condition()).is_empty(),
+                        on_cancel: move |_| {
+                            popup_open.set(false);
+                            popup_content.set(PopupContent::None);
                         },
-                    }
-                    Button {
-                        class: "w-full",
-                        label: "Import",
-                        kind: ButtonKind::Primary,
-                        disabled,
-                        on_click: move |_| {
-                            import(());
+                        on_value: move |args| {
+                            add_action(args);
+                            popup_open.set(false);
+                            popup_content.set(PopupContent::None);
                         },
+                        value: action,
                     }
-                }
+                },
+                PopupContent::Edit { action, index } => rsx! {
+                    PopupActionInputContent {
+                        modifying: true,
+                        linkable: filter_actions(actions(), action.condition())
+                            .into_iter()
+                            .next()
+                            .map(|first| first.1 != index)
+                            .unwrap_or_default(),
+                        on_copy: move |_| {
+                            popup_content.set(PopupContent::Add(action));
+                        },
+                        on_cancel: move |_| {
+                            popup_open.set(false);
+                            popup_content.set(PopupContent::None);
+                        },
+                        on_value: move |(action, _)| {
+                            edit_action((action, index));
+                            popup_open.set(false);
+                            popup_content.set(PopupContent::None);
+                        },
+                        value: action,
+                    }
+                },
             }
         }
     }
 }
 
 #[component]
-fn PopupPlatformInput(
-    index: Option<usize>,
-    on_cancel: EventHandler,
-    on_value: EventHandler<(Platform, Option<usize>)>,
+fn PopupPlatformInputContent(
+    modifying: bool,
+    on_cancel: Callback,
+    on_value: Callback<Platform>,
     value: Platform,
 ) -> Element {
-    const ICON_CONTAINER_CLASS: &str = "absolute invisible group-hover:visible top-5 right-1 w-4 h-6 flex justify-center items-center";
-    const ICON_CLASS: &str = "w-3 h-3 text-gray-50 fill-current";
-
     let position = use_context::<AppState>().position;
     let mut platform = use_signal(|| value);
-    let section_name = if index.is_some() {
-        "Modify platform"
-    } else {
-        "Add platform"
-    };
-    let button_name = if index.is_some() { "Save" } else { "Add" };
-
-    use_effect(use_reactive!(|value| platform.set(value)));
 
     rsx! {
-        Popup {
-            title: section_name,
-            class: "max-w-104 max-h-36",
-            confirm_button: button_name,
-            on_confirm: move |_| {
-                on_value((*platform.peek(), index));
-            },
-            cancel_button: "Cancel",
-            on_cancel: move |_| {
-                on_cancel(());
-            },
-            div { class: "grid grid-cols-3 gap-3",
-                div { class: "relative group",
-                    ActionsNumberInputI32 {
-                        label: "X start",
-                        on_value: move |x| {
-                            platform.write().x_start = x;
-                        },
-                        value: platform().x_start,
-                    }
-                    div {
-                        class: ICON_CONTAINER_CLASS,
-                        onclick: move |_| {
-                            platform.write().x_start = position.peek().0;
-                        },
-                        PositionIcon { class: ICON_CLASS }
+        PopupContent { title: if modifying { "Modify platform" } else { "Add platform" },
+            div { class: "grid grid-cols-3 gap-3 pb-10 overflow-y-auto",
+                ActionsPositionInput {
+                    label: "X start",
+                    on_icon_click: move |_| {
+                        platform.write().x_start = position.peek().0;
+                    },
+                    on_value: move |x| {
+                        platform.write().x_start = x;
+                    },
+                    value: platform().x_start,
+                }
+                ActionsPositionInput {
+                    label: "X end",
+                    on_icon_click: move |_| {
+                        platform.write().x_end = position.peek().0;
+                    },
+                    on_value: move |x| {
+                        platform.write().x_end = x;
+                    },
+                    value: platform().x_end,
+                }
+                ActionsPositionInput {
+                    label: "Y",
+                    on_icon_click: move |_| {
+                        platform.write().y = position.peek().1;
+                    },
+                    on_value: move |y| {
+                        platform.write().y = y;
+                    },
+                    value: platform().y,
+                }
+            }
+
+            div { class: "flex w-full gap-3 absolute bottom-0 py-2 bg-secondary-surface",
+                Button {
+                    class: "flex-grow",
+                    style: ButtonStyle::OutlinePrimary,
+                    on_click: move |_| {
+                        on_value(*platform.peek());
+                    },
+
+                    if modifying {
+                        "Save"
+                    } else {
+                        "Add"
                     }
                 }
-                div { class: "relative group",
-                    ActionsNumberInputI32 {
-                        label: "X end",
-                        on_value: move |x| {
-                            platform.write().x_end = x;
-                        },
-                        value: platform().x_end,
-                    }
-                    div {
-                        class: ICON_CONTAINER_CLASS,
-                        onclick: move |_| {
-                            platform.write().x_end = position.peek().0;
-                        },
-                        PositionIcon { class: ICON_CLASS }
-                    }
-                }
-                div { class: "relative group",
-                    ActionsNumberInputI32 {
-                        label: "Y",
-                        on_value: move |y| {
-                            platform.write().y = y;
-                        },
-                        value: platform().y,
-                    }
-                    div {
-                        class: ICON_CONTAINER_CLASS,
-                        onclick: move |_| {
-                            platform.write().y = position.peek().1;
-                        },
-                        PositionIcon { class: ICON_CLASS }
-                    }
+                Button {
+                    class: "flex-grow",
+                    style: ButtonStyle::OutlineSecondary,
+                    on_click: move |_| {
+                        on_cancel(());
+                    },
+                    "Cancel"
                 }
             }
         }
@@ -1047,28 +1098,16 @@ fn PopupPlatformInput(
 }
 
 #[component]
-fn PopupBoundInput(
-    on_cancel: EventHandler,
-    on_value: EventHandler<Bound>,
+fn PopupMobbingBoundInputContent(
+    on_cancel: Callback,
+    on_value: Callback<Bound>,
     value: Bound,
 ) -> Element {
     let mut bound = use_signal(|| value);
 
-    use_effect(use_reactive!(|value| bound.set(value)));
-
     rsx! {
-        Popup {
-            title: "Modify mobbing bound",
-            class: "max-w-108 max-h-50",
-            confirm_button: "Save",
-            on_confirm: move |_| {
-                on_value(*bound.peek());
-            },
-            cancel_button: "Cancel",
-            on_cancel: move |_| {
-                on_cancel(());
-            },
-            div { class: "grid grid-cols-2 gap-3",
+        PopupContent { title: "Modify mobbing bound",
+            div { class: "grid grid-cols-2 gap-3 pb-10 overflow-y-auto",
                 ActionsNumberInputI32 {
                     label: "X offset",
                     on_value: move |x| {
@@ -1098,119 +1137,112 @@ fn PopupBoundInput(
                     value: bound().height,
                 }
             }
+
+            div { class: "flex w-full gap-3 absolute bottom-0 py-2 bg-secondary-surface",
+                Button {
+                    class: "flex-grow",
+                    style: ButtonStyle::OutlinePrimary,
+                    on_click: move |_| {
+                        on_value(*bound.peek());
+                    },
+
+                    "Save"
+                }
+                Button {
+                    class: "flex-grow",
+                    style: ButtonStyle::OutlineSecondary,
+                    on_click: move |_| {
+                        on_cancel(());
+                    },
+                    "Cancel"
+                }
+            }
         }
     }
 }
 
 #[component]
-fn PopupActionInput(
-    actions: ReadOnlySignal<Vec<Action>>,
-    on_copy: EventHandler,
-    on_cancel: EventHandler,
-    on_value: EventHandler<ActionInputValueKind>,
-    kind: ActionInputKind,
+fn PopupMobbingKeyInputContent(
+    on_cancel: Callback,
+    on_value: Callback<MobbingKey>,
+    value: MobbingKey,
 ) -> Element {
-    let (action, index) = match kind {
-        ActionInputKind::PingPongOrAutoMobbing(key) => {
-            let key = ActionKey {
-                key: key.key,
-                link_key: key.link_key,
-                count: key.count,
-                with: key.with,
-                wait_before_use_millis: key.wait_before_millis,
-                wait_before_use_millis_random_range: key.wait_before_millis_random_range,
-                wait_after_use_millis: key.wait_after_millis,
-                wait_after_use_millis_random_range: key.wait_after_millis_random_range,
-                ..ActionKey::default()
-            };
-            let action = Action::Key(key);
-
-            (action, None)
-        }
-        ActionInputKind::Add(action) => (action, None),
-        ActionInputKind::Edit(action, index) => (action, Some(index)),
+    let key = ActionKey {
+        key: value.key,
+        link_key: value.link_key,
+        count: value.count,
+        with: value.with,
+        wait_before_use_millis: value.wait_before_millis,
+        wait_before_use_millis_random_range: value.wait_before_millis_random_range,
+        wait_after_use_millis: value.wait_after_millis,
+        wait_after_use_millis_random_range: value.wait_after_millis_random_range,
+        ..ActionKey::default()
     };
-    let switchable = !matches!(kind, ActionInputKind::PingPongOrAutoMobbing(_));
-    let modifying = matches!(
-        kind,
-        ActionInputKind::Edit(_, _) | ActionInputKind::PingPongOrAutoMobbing(_)
-    );
-    let copyable = matches!(kind, ActionInputKind::Edit(_, _));
-    let can_create_linked_action = match kind {
-        ActionInputKind::Add(_) | ActionInputKind::Edit(_, _) => match action.condition() {
-            ActionCondition::EveryMillis(_)
-            | ActionCondition::ErdaShowerOffCooldown
-            | ActionCondition::Any => {
-                let actions = actions();
-                let filtered = filter_actions(actions, action.condition());
-                let is_not_empty = !filtered.is_empty();
-                let first_index = filtered.into_iter().next().map(|first| first.1);
+    let action = Action::Key(key);
 
-                is_not_empty && first_index != index
-            }
-            ActionCondition::Linked => false,
-        },
-        ActionInputKind::PingPongOrAutoMobbing(_) => false,
-    };
-    let section_text = match kind {
-        ActionInputKind::Add(_) | ActionInputKind::Edit(_, _) => {
-            let name = match action.condition() {
-                backend::ActionCondition::Any => "normal",
-                backend::ActionCondition::EveryMillis(_) => "every milliseconds",
-                backend::ActionCondition::ErdaShowerOffCooldown => "Erda Shower off cooldown",
-                backend::ActionCondition::Linked => "linked",
-            };
-            if modifying {
-                format!("Modify a {name} action")
-            } else {
-                format!("Add a new {name} action")
+    rsx! {
+        PopupContent { title: "Modify mobbing key",
+            ActionInput {
+                switchable: false,
+                modifying: true,
+                directionable: false,
+                on_cancel,
+                on_value: move |(action, _)| {
+                    let action = match action {
+                        Action::Move(_) => unreachable!(),
+                        Action::Key(action) => action,
+                    };
+                    let key = MobbingKey {
+                        key: action.key,
+                        link_key: action.link_key,
+                        count: action.count,
+                        with: action.with,
+                        wait_before_millis: action.wait_before_use_millis,
+                        wait_before_millis_random_range: action.wait_before_use_millis_random_range,
+                        wait_after_millis: action.wait_after_use_millis,
+                        wait_after_millis_random_range: action.wait_after_use_millis_random_range,
+                    };
+                    on_value(key);
+                },
+                value: action,
             }
         }
-        ActionInputKind::PingPongOrAutoMobbing(_) => "Modify mobbing skill".to_string(),
+    }
+}
+
+#[component]
+fn PopupActionInputContent(
+    modifying: bool,
+    linkable: bool,
+    #[props(default)] on_copy: Option<Callback>,
+    on_cancel: Callback,
+    on_value: Callback<(Action, ActionCondition)>,
+    value: Action,
+) -> Element {
+    let name = match value.condition() {
+        backend::ActionCondition::Any => "normal",
+        backend::ActionCondition::EveryMillis(_) => "every milliseconds",
+        backend::ActionCondition::ErdaShowerOffCooldown => "Erda Shower off cooldown",
+        backend::ActionCondition::Linked => "linked",
+    };
+    let title = if modifying {
+        format!("Modify a {name} action")
+    } else {
+        format!("Add a new {name} action")
     };
 
     rsx! {
-        // TODO: Use Popup's buttons
-        Popup { title: section_text, class: "min-w-120 max-w-120 max-h-100",
+        PopupContent { title,
             ActionInput {
-                switchable,
+                switchable: true,
                 modifying,
-                copyable,
-                can_create_linked_action,
-                can_have_position: switchable,
-                can_have_direction: switchable,
+                linkable,
+                positionable: true,
+                directionable: true,
                 on_copy,
                 on_cancel,
-                on_value: move |(action, condition)| {
-                    match kind {
-                        ActionInputKind::Add(_) => {
-                            on_value(ActionInputValueKind::Add(action, condition));
-                        }
-                        ActionInputKind::Edit(_, index) => {
-                            on_value(ActionInputValueKind::Edit(action, index));
-                        }
-                        ActionInputKind::PingPongOrAutoMobbing(_) => {
-                            let action = match action {
-                                Action::Move(_) => unreachable!(),
-                                Action::Key(action) => action,
-                            };
-                            let key = MobbingKey {
-                                key: action.key,
-                                link_key: action.link_key,
-                                count: action.count,
-                                with: action.with,
-                                wait_before_millis: action.wait_before_use_millis,
-                                wait_before_millis_random_range: action
-                                    .wait_before_use_millis_random_range,
-                                wait_after_millis: action.wait_after_use_millis,
-                                wait_after_millis_random_range: action
-                                    .wait_after_use_millis_random_range,
-                            };
-                            on_value(ActionInputValueKind::PingPongOrAutoMobbing(key));
-                        }
-                    }
-                },
-                value: action,
+                on_value,
+                value,
             }
         }
     }
@@ -1220,16 +1252,15 @@ fn PopupActionInput(
 fn ActionInput(
     switchable: bool,
     modifying: bool,
-    copyable: bool,
-    can_create_linked_action: bool,
-    can_have_position: bool,
-    can_have_direction: bool,
-    on_copy: EventHandler,
-    on_cancel: EventHandler,
-    on_value: EventHandler<(Action, ActionCondition)>,
-    value: Action,
+    #[props(default)] linkable: bool,
+    #[props(default)] positionable: bool,
+    directionable: bool,
+    #[props(default)] on_copy: Option<Callback>,
+    on_cancel: Callback,
+    on_value: Callback<(Action, ActionCondition)>,
+    value: ReadOnlySignal<Action>,
 ) -> Element {
-    let mut action = use_signal(|| value);
+    let mut action = use_signal(&*value);
     let button_text = use_memo(move || {
         if matches!(action(), Action::Move(_)) {
             "Switch to key"
@@ -1238,72 +1269,81 @@ fn ActionInput(
         }
     });
 
-    use_effect(use_reactive!(|value| action.set(value)));
+    use_effect(move || {
+        action.set(value());
+    });
 
     rsx! {
-        div { class: "flex-none grid auto-cols-auto grid-flow-col",
-            if switchable {
-                Button {
-                    label: button_text(),
-                    kind: ButtonKind::Primary,
-                    on_click: move |_| {
-                        if discriminant(&value) != discriminant(&*action.peek()) {
-                            action.set(value);
-                        } else if matches!(value, Action::Move(_)) {
-                            action
-                                .set(
-                                    Action::Key(ActionKey {
-                                        condition: value.condition(),
-                                        ..ActionKey::default()
-                                    }),
-                                );
-                        } else {
-                            action
-                                .set(
-                                    Action::Move(ActionMove {
-                                        condition: value.condition(),
-                                        ..ActionMove::default()
-                                    }),
-                                );
+        div { class: "flex flex-col pb-10 overflow-y-auto max-h-100",
+            if switchable || on_copy.is_some() {
+                div { class: "grid grid-flow-col",
+                    if switchable {
+                        Button {
+                            style: ButtonStyle::Primary,
+                            on_click: move |_| {
+                                let value = *value.peek();
+                                if discriminant(&value) != discriminant(&*action.peek()) {
+                                    action.set(value);
+                                } else if matches!(value, Action::Move(_)) {
+                                    action
+                                        .set(
+                                            Action::Key(ActionKey {
+                                                condition: value.condition(),
+                                                ..ActionKey::default()
+                                            }),
+                                        );
+                                } else {
+                                    action
+                                        .set(
+                                            Action::Move(ActionMove {
+                                                condition: value.condition(),
+                                                ..ActionMove::default()
+                                            }),
+                                        );
+                                }
+                            },
+                            class: "text-xxs",
+
+                            {button_text}
                         }
-                    },
-                    class: "label border-b border-gray-600",
+                    }
+                    if let Some(on_copy) = on_copy {
+                        Button {
+                            style: ButtonStyle::Primary,
+                            on_click: on_copy,
+                            class: "text-xxs",
+                            "Copy"
+                        }
+                    }
                 }
+                div { class: "col-span-3 border-b border-primary-border mb-3" }
             }
-            if copyable {
-                Button {
-                    label: "Copy",
-                    kind: ButtonKind::Primary,
-                    on_click: on_copy,
-                    class: "label border-b border-gray-600",
-                }
+            match action() {
+                Action::Move(action) => rsx! {
+                    ActionMoveInput {
+                        modifying,
+                        linkable,
+                        on_cancel,
+                        on_value: move |(action, condition)| {
+                            on_value((Action::Move(action), condition));
+                        },
+                        value: action,
+                    }
+                },
+                Action::Key(action) => rsx! {
+                    ActionKeyInput {
+                        modifying,
+                        linkable,
+                        positionable,
+                        directionable,
+                        on_cancel,
+                        on_value: move |(action, condition)| {
+                            on_value((Action::Key(action), condition));
+                        },
+                        value: action,
+                    }
+                },
             }
-        }
-        match action() {
-            Action::Move(action) => rsx! {
-                ActionMoveInput {
-                    modifying,
-                    can_create_linked_action,
-                    on_cancel,
-                    on_value: move |(action, condition)| {
-                        on_value((Action::Move(action), condition));
-                    },
-                    value: action,
-                }
-            },
-            Action::Key(action) => rsx! {
-                ActionKeyInput {
-                    modifying,
-                    can_create_linked_action,
-                    can_have_position,
-                    can_have_direction,
-                    on_cancel,
-                    on_value: move |(action, condition)| {
-                        on_value((Action::Key(action), condition));
-                    },
-                    value: action,
-                }
-            },
         }
     }
 }
@@ -1311,48 +1351,42 @@ fn ActionInput(
 #[component]
 fn ActionMoveInput(
     modifying: bool,
-    can_create_linked_action: bool,
-    on_cancel: EventHandler,
-    on_value: EventHandler<(ActionMove, ActionCondition)>,
-    value: ActionMove,
+    linkable: bool,
+    on_cancel: Callback,
+    on_value: Callback<(ActionMove, ActionCondition)>,
+    value: ReadOnlySignal<ActionMove>,
 ) -> Element {
-    const ICON_CONTAINER_CLASS: &str = "absolute invisible group-hover:visible top-5 right-1 w-4 h-6 flex justify-center items-center";
-    const ICON_CLASS: &str = "w-3 h-3 text-gray-50 fill-current";
-
     let position = use_context::<AppState>().position;
-    let mut action = use_signal(|| value);
+    let mut action = use_signal(&*value);
+    let action_condition = value().condition;
 
-    use_effect(use_reactive!(|value| { action.set(value) }));
+    use_effect(move || {
+        action.set(value());
+    });
 
     rsx! {
         div { class: "grid grid-cols-3 gap-3",
             // Position
             ActionsCheckbox {
                 label: "Adjust",
-                on_value: move |adjust: bool| {
+                on_checked: move |adjust: bool| {
                     let mut action = action.write();
                     action.position.allow_adjusting = adjust;
                 },
-                value: action().position.allow_adjusting,
+                checked: action().position.allow_adjusting,
             }
             div { class: "col-span-2" }
-            div { class: "relative group",
-                ActionsNumberInputI32 {
-                    label: "X",
-                    on_value: move |x| {
-                        let mut action = action.write();
-                        action.position.x = x;
-                    },
-                    value: action().position.x,
-                }
-                div {
-                    class: ICON_CONTAINER_CLASS,
-                    onclick: move |_| {
-                        let mut action = action.write();
-                        action.position.x = position.peek().0;
-                    },
-                    PositionIcon { class: ICON_CLASS }
-                }
+            ActionsPositionInput {
+                label: "X",
+                on_icon_click: move |_| {
+                    let mut action = action.write();
+                    action.position.x = position.peek().0;
+                },
+                on_value: move |x| {
+                    let mut action = action.write();
+                    action.position.x = x;
+                },
+                value: action().position.x,
             }
 
             ActionsNumberInputI32 {
@@ -1363,23 +1397,17 @@ fn ActionMoveInput(
                 },
                 value: action().position.x_random_range,
             }
-            div { class: "relative group",
-                ActionsNumberInputI32 {
-                    label: "Y",
-                    on_value: move |y| {
-                        let mut action = action.write();
-                        action.position.y = y;
-                    },
-                    value: action().position.y,
-                }
-                div {
-                    class: ICON_CONTAINER_CLASS,
-                    onclick: move |_| {
-                        let mut action = action.write();
-                        action.position.y = position.peek().1;
-                    },
-                    PositionIcon { class: ICON_CLASS }
-                }
+            ActionsPositionInput {
+                label: "Y",
+                on_icon_click: move |_| {
+                    let mut action = action.write();
+                    action.position.y = position.peek().1;
+                },
+                on_value: move |y| {
+                    let mut action = action.write();
+                    action.position.y = y;
+                },
+                value: action().position.y,
             }
             ActionsMillisInput {
                 label: "Wait after move",
@@ -1389,37 +1417,41 @@ fn ActionMoveInput(
                 },
                 value: action().wait_after_move_millis,
             }
-            if can_create_linked_action {
+            if linkable {
                 ActionsCheckbox {
                     label: "Linked action",
-                    on_value: move |is_linked: bool| {
+                    on_checked: move |is_linked: bool| {
                         let mut action = action.write();
                         action.condition = if is_linked {
                             ActionCondition::Linked
                         } else {
-                            value.condition
+                            action_condition
                         };
                     },
-                    value: matches!(action().condition, ActionCondition::Linked),
+                    checked: matches!(action().condition, ActionCondition::Linked),
                 }
             }
         }
-        div { class: "flex w-full gap-3 absolute bottom-2",
+        div { class: "flex w-full gap-3 absolute bottom-0 py-2 bg-secondary-surface",
             Button {
-                class: "flex-grow border border-gray-600",
-                label: if modifying { "Save" } else { "Add" },
-                kind: ButtonKind::Primary,
+                class: "flex-grow",
+                style: ButtonStyle::OutlinePrimary,
                 on_click: move |_| {
-                    on_value((*action.peek(), value.condition));
+                    on_value((*action.peek(), action_condition));
                 },
+                if modifying {
+                    "Save"
+                } else {
+                    "Add"
+                }
             }
             Button {
-                class: "flex-grow border border-gray-600",
-                label: "Cancel",
-                kind: ButtonKind::Secondary,
+                class: "flex-grow",
+                style: ButtonStyle::OutlineSecondary,
                 on_click: move |_| {
                     on_cancel(());
                 },
+                "Cancel"
             }
         }
     }
@@ -1428,69 +1460,64 @@ fn ActionMoveInput(
 #[component]
 fn ActionKeyInput(
     modifying: bool,
-    can_create_linked_action: bool,
-    can_have_position: bool,
-    can_have_direction: bool,
-    on_cancel: EventHandler,
-    on_value: EventHandler<(ActionKey, ActionCondition)>,
-    value: ActionKey,
+    linkable: bool,
+    positionable: bool,
+    directionable: bool,
+    on_cancel: Callback,
+    on_value: Callback<(ActionKey, ActionCondition)>,
+    value: ReadOnlySignal<ActionKey>,
 ) -> Element {
-    const ICON_CONTAINER_CLASS: &str = "absolute invisible group-hover:visible top-5 right-1 w-4 h-6 flex justify-center items-center";
-    const ICON_CLASS: &str = "w-3 h-3 text-gray-50 fill-current";
-
     let position = use_context::<AppState>().position;
-    let mut action = use_signal(|| value);
+    let mut action = use_signal(&*value);
+    let action_condition = value().condition;
 
-    use_effect(use_reactive!(|value| { action.set(value) }));
+    use_effect(move || {
+        action.set(value());
+    });
 
     rsx! {
-        div { class: "grid grid-cols-3 gap-3 pb-10 pr-2 overflow-y-auto scrollbar",
-            if can_have_position {
+        div { class: "grid grid-cols-3 gap-3 pr-2 overflow-y-auto",
+            if positionable {
                 ActionsCheckbox {
                     label: "Positioned",
-                    on_value: move |has_position: bool| {
+                    on_checked: move |has_position: bool| {
                         let mut action = action.write();
                         action.position = has_position.then_some(Position::default());
                     },
-                    value: action().position.is_some(),
+                    checked: action().position.is_some(),
                 }
                 ActionsCheckbox {
                     label: "Adjust",
                     disabled: action().position.is_none(),
-                    on_value: move |adjust: bool| {
+                    on_checked: move |adjust: bool| {
                         let mut action = action.write();
                         action.position.as_mut().unwrap().allow_adjusting = adjust;
                     },
-                    value: action().position.map(|pos| pos.allow_adjusting).unwrap_or_default(),
+                    checked: action().position.map(|pos| pos.allow_adjusting).unwrap_or_default(),
                 }
                 div {}
 
-
-                // Position
-                div { class: "relative group",
-                    ActionsNumberInputI32 {
-                        label: "X",
-                        disabled: action().position.is_none(),
-                        on_value: move |x| {
-                            let mut action = action.write();
-                            if let Some(pos) = action.position.as_mut() {
-                                pos.x = x;
-                            }
-                        },
-                        value: action().position.map(|pos| pos.x).unwrap_or_default(),
-                    }
-                    if action().position.is_some() {
-                        div {
-                            class: ICON_CONTAINER_CLASS,
-                            onclick: move |_| {
+                ActionsPositionInput {
+                    label: "X",
+                    disabled: action().position.is_none(),
+                    on_icon_click: action()
+                        .position
+                        .is_some()
+                        .then_some(
+                            Callback::new(move |_| {
                                 let mut action = action.write();
                                 if let Some(pos) = action.position.as_mut() {
                                     pos.x = position.peek().0;
                                 }
-                            },
-                            PositionIcon { class: ICON_CLASS }
+                            }),
+                        ),
+                    on_value: move |x| {
+                        let mut action = action.write();
+                        if let Some(pos) = action.position.as_mut() {
+                            pos.x = x;
                         }
-                    }
+                    },
+                    value: action().position.map(|pos| pos.x).unwrap_or_default(),
                 }
                 ActionsNumberInputI32 {
                     label: "X random range",
@@ -1503,30 +1530,27 @@ fn ActionKeyInput(
                     },
                     value: action().position.map(|pos| pos.x_random_range).unwrap_or_default(),
                 }
-                div { class: "relative group",
-                    ActionsNumberInputI32 {
-                        label: "Y",
-                        disabled: action().position.is_none(),
-                        on_value: move |y| {
-                            let mut action = action.write();
-                            if let Some(pos) = action.position.as_mut() {
-                                pos.y = y;
-                            }
-                        },
-                        value: action().position.map(|pos| pos.y).unwrap_or_default(),
-                    }
-                    if action().position.is_some() {
-                        div {
-                            class: ICON_CONTAINER_CLASS,
-                            onclick: move |_| {
+                ActionsPositionInput {
+                    label: "Y",
+                    disabled: action().position.is_none(),
+                    on_icon_click: action()
+                        .position
+                        .is_some()
+                        .then_some(
+                            Callback::new(move |_| {
                                 let mut action = action.write();
                                 if let Some(pos) = action.position.as_mut() {
                                     pos.y = position.peek().1;
                                 }
-                            },
-                            PositionIcon { class: ICON_CLASS }
+                            }),
+                        ),
+                    on_value: move |y| {
+                        let mut action = action.write();
+                        if let Some(pos) = action.position.as_mut() {
+                            pos.y = y;
                         }
-                    }
+                    },
+                    value: action().position.map(|pos| pos.y).unwrap_or_default(),
                 }
             }
 
@@ -1548,19 +1572,19 @@ fn ActionKeyInput(
                 },
                 value: action().count,
             }
-            if can_create_linked_action {
+            if linkable {
                 ActionsCheckbox {
                     label: "Linked action",
-                    on_value: move |is_linked: bool| {
+                    on_checked: move |is_linked: bool| {
                         let mut action = action.write();
                         action.condition = if is_linked {
                             ActionCondition::Linked
                         } else {
-                            value.condition
+                            action_condition
                         };
                         action.queue_to_front = None;
                     },
-                    value: matches!(action().condition, ActionCondition::Linked),
+                    checked: matches!(action().condition, ActionCondition::Linked),
                 }
             } else {
                 div {} // Spacer
@@ -1579,7 +1603,7 @@ fn ActionKeyInput(
             ActionsSelect::<LinkKeyBinding> {
                 label: "Link key type",
                 disabled: action().link_key.is_none(),
-                on_select: move |link_key: LinkKeyBinding| {
+                on_selected: move |link_key: LinkKeyBinding| {
                     let mut action = action.write();
                     action.link_key = Some(
                         link_key.with_key(action.link_key.expect("has link key if selectable").key()),
@@ -1589,11 +1613,11 @@ fn ActionKeyInput(
             }
             ActionsCheckbox {
                 label: "Has link key",
-                on_value: move |has_link_key: bool| {
+                on_checked: move |has_link_key: bool| {
                     let mut action = action.write();
                     action.link_key = has_link_key.then_some(LinkKeyBinding::default());
                 },
-                value: action().link_key.is_some(),
+                checked: action().link_key.is_some(),
             }
 
             // Use with, direction
@@ -1601,17 +1625,17 @@ fn ActionKeyInput(
             ActionsSelect::<ActionKeyWith> {
                 label: "Use with",
                 disabled: false,
-                on_select: move |with| {
+                on_selected: move |with| {
                     let mut action = action.write();
                     action.with = with;
                 },
                 selected: action().with,
             }
-            if can_have_direction {
+            if directionable {
                 ActionsSelect::<ActionKeyDirection> {
                     label: "Use direction",
                     disabled: false,
-                    on_select: move |direction| {
+                    on_selected: move |direction| {
                         let mut action = action.write();
                         action.direction = direction;
                     },
@@ -1627,11 +1651,11 @@ fn ActionKeyInput(
             {
                 ActionsCheckbox {
                     label: "Queue to front",
-                    on_value: move |queue_to_front: bool| {
+                    on_checked: move |queue_to_front: bool| {
                         let mut action = action.write();
                         action.queue_to_front = Some(queue_to_front);
                     },
-                    value: action().queue_to_front.is_some(),
+                    checked: action().queue_to_front.is_some(),
                 }
             } else {
                 div {} // Spacer
@@ -1685,22 +1709,26 @@ fn ActionKeyInput(
                 value: action().wait_after_use_millis_random_range,
             }
         }
-        div { class: "flex w-full gap-3 absolute bottom-0 py-2 bg-gray-900",
+        div { class: "flex w-full gap-3 absolute bottom-0 py-2 bg-secondary-surface",
             Button {
-                class: "flex-grow border border-gray-600",
-                label: if modifying { "Save" } else { "Add" },
-                kind: ButtonKind::Primary,
+                class: "flex-grow",
+                style: ButtonStyle::OutlinePrimary,
                 on_click: move |_| {
-                    on_value((*action.peek(), value.condition));
+                    on_value((*action.peek(), action_condition));
                 },
+                if modifying {
+                    "Save"
+                } else {
+                    "Add"
+                }
             }
             Button {
-                class: "flex-grow border border-gray-600",
-                label: "Cancel",
-                kind: ButtonKind::Secondary,
+                class: "flex-grow",
+                style: ButtonStyle::OutlineSecondary,
                 on_click: move |_| {
                     on_cancel(());
                 },
+                "Cancel"
             }
         }
     }
@@ -1708,10 +1736,10 @@ fn ActionKeyInput(
 
 #[component]
 fn ActionList(
-    on_add_click: EventHandler,
-    on_item_click: EventHandler<(Action, usize)>,
-    on_item_move: EventHandler<(usize, ActionCondition, bool)>,
-    on_item_delete: EventHandler<usize>,
+    on_add_click: Callback,
+    on_item_click: Callback<(Action, usize)>,
+    on_item_move: Callback<(usize, ActionCondition, bool)>,
+    on_item_delete: Callback<usize>,
     condition_filter: ActionCondition,
     disabled: bool,
     actions: Vec<Action>,
@@ -1721,11 +1749,11 @@ fn ActionList(
         condition_filter: ActionCondition,
         action: Action,
         index: usize,
-        on_item_move: EventHandler<(usize, ActionCondition, bool)>,
-        on_item_delete: EventHandler<usize>,
+        on_item_move: Callback<(usize, ActionCondition, bool)>,
+        on_item_delete: Callback<usize>,
     ) -> Element {
-        const ICON_CONTAINER_CLASS: &str = "w-4 h-6 flex justify-center items-center";
-        const ICON_CLASS: &str = "w-[11px] h-[11px] fill-current";
+        const ICON_CONTAINER_CLASS: &str = "size-fit";
+        const ICON_CLASS: &str = "size-3";
 
         let container_margin = if matches!(action.condition(), ActionCondition::Linked) {
             ""
@@ -1733,14 +1761,14 @@ fn ActionList(
             "mt-2"
         };
         rsx! {
-            div { class: "absolute invisible group-hover:visible top-0 right-1 flex {container_margin}",
+            div { class: "self-stretch invisible group-hover:visible group-hover:bg-secondary-surface flex gap-1 items-center {container_margin} pr-1",
                 div {
                     class: ICON_CONTAINER_CLASS,
                     onclick: move |e| {
                         e.stop_propagation();
                         on_item_move((index, condition_filter, true));
                     },
-                    UpArrowIcon { class: "{ICON_CLASS} text-gray-50" }
+                    UpArrowIcon { class: ICON_CLASS }
                 }
                 div {
                     class: ICON_CONTAINER_CLASS,
@@ -1748,7 +1776,7 @@ fn ActionList(
                         e.stop_propagation();
                         on_item_move((index, condition_filter, false));
                     },
-                    DownArrowIcon { class: "{ICON_CLASS} text-gray-50" }
+                    DownArrowIcon { class: ICON_CLASS }
                 }
                 div {
                     class: ICON_CONTAINER_CLASS,
@@ -1756,7 +1784,7 @@ fn ActionList(
                         e.stop_propagation();
                         on_item_delete(index);
                     },
-                    XIcon { class: "{ICON_CLASS} text-red-500" }
+                    XIcon { class: "{ICON_CLASS}" }
                 }
             }
         }
@@ -1768,19 +1796,23 @@ fn ActionList(
         div { class: "flex flex-col",
             for (action , index) in filtered {
                 div {
-                    class: "relative group",
+                    class: "flex group flex-grow",
                     onclick: move |e| {
                         e.stop_propagation();
                         on_item_click((action, index));
                     },
-                    match action {
-                        Action::Move(action) => rsx! {
-                            ActionMoveItem { action }
-                        },
-                        Action::Key(action) => rsx! {
-                            ActionKeyItem { action }
-                        },
+
+                    PopupTrigger { class: "flex-grow",
+                        match action {
+                            Action::Move(action) => rsx! {
+                                ActionMoveItem { action }
+                            },
+                            Action::Key(action) => rsx! {
+                                ActionKeyItem { action }
+                            },
+                        }
                     }
+
                     Icons {
                         condition_filter,
                         action,
@@ -1790,14 +1822,18 @@ fn ActionList(
                     }
                 }
             }
-            Button {
-                label: "Add action",
-                kind: ButtonKind::Secondary,
-                on_click: move |_| {
-                    on_add_click(());
-                },
-                disabled,
-                class: "label mt-2",
+
+            PopupTrigger {
+                Button {
+                    style: ButtonStyle::Secondary,
+                    on_click: move |_| {
+                        on_add_click(());
+                    },
+                    disabled,
+                    class: "mt-2 w-full",
+
+                    "Add action"
+                }
             }
         }
     }
@@ -1835,7 +1871,7 @@ fn ActionMoveItem(action: ActionMove) -> Element {
     let wait_secs = format!("⏱︎ {:.2}s", wait_after_move_millis as f32 / 1000.0);
 
     rsx! {
-        div { class: "grid grid-cols-[140px_100px_auto] h-6 paragraph-xs !text-gray-400 group-hover:bg-gray-900 {linked_action}",
+        div { class: "grid grid-cols-[140px_100px_auto] h-6 text-xs text-secondary-text group-hover:bg-secondary-surface {linked_action}",
             div { class: "{ITEM_BORDER_CLASS} {ITEM_TEXT_CLASS}", "{position}" }
             div { class: "{ITEM_TEXT_CLASS}", "{wait_secs}" }
             div {}
@@ -1924,7 +1960,7 @@ fn ActionKeyItem(action: ActionKey) -> Element {
     };
 
     rsx! {
-        div { class: "grid grid-cols-[140px_100px_30px_auto] h-6 paragraph-xs !text-gray-400 group-hover:bg-gray-900 {linked_action}",
+        div { class: "grid grid-cols-[140px_100px_30px_auto] h-6 text-xs text-secondary-text group-hover:bg-secondary-surface {linked_action}",
             div { class: "{ITEM_BORDER_CLASS} {ITEM_TEXT_CLASS}", "{queue_to_front}{position}" }
             div { class: "{ITEM_BORDER_CLASS} {ITEM_TEXT_CLASS}", "{link_key}{key} × {count}" }
             div { class: "{ITEM_BORDER_CLASS} {ITEM_TEXT_CLASS}",
@@ -1943,15 +1979,45 @@ fn ActionKeyItem(action: ActionKey) -> Element {
 fn ActionsSelect<T: 'static + Clone + PartialEq + Display + IntoEnumIterator>(
     label: &'static str,
     disabled: bool,
-    on_select: EventHandler<T>,
-    selected: T,
+    on_selected: Callback<T>,
+    selected: ReadOnlySignal<T>,
+) -> Element {
+    let selected_equal =
+        use_callback(move |value: T| discriminant(&selected()) == discriminant(&value));
+
+    rsx! {
+        Labeled { label,
+            Select::<T> { on_selected, disabled,
+
+                for value in T::iter() {
+                    SelectOption::<T> {
+                        value: value.clone(),
+                        label: value.to_string(),
+                        selected: selected_equal(value),
+                        disabled,
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ActionsPositionInput(
+    label: &'static str,
+    #[props(default)] disabled: bool,
+    on_icon_click: ReadOnlySignal<Option<Callback>>,
+    on_value: Callback<i32>,
+    value: i32,
 ) -> Element {
     rsx! {
-        EnumSelect {
-            label,
-            disabled,
-            on_select,
-            selected,
+        Labeled { label,
+            PositionInput {
+                disabled,
+                on_icon_click,
+                on_value,
+                value,
+            }
         }
     }
 }
@@ -1959,16 +2025,13 @@ fn ActionsSelect<T: 'static + Clone + PartialEq + Display + IntoEnumIterator>(
 #[component]
 fn ActionsNumberInputI32(
     label: &'static str,
-    #[props(default = false)] disabled: bool,
-    on_value: EventHandler<i32>,
+    #[props(default)] disabled: bool,
+    on_value: Callback<i32>,
     value: i32,
 ) -> Element {
     rsx! {
-        NumberInputI32 {
-            label,
-            disabled,
-            on_value,
-            value,
+        Labeled { label,
+            PrimitiveIntegerInput { disabled, on_value, value }
         }
     }
 }
@@ -1976,17 +2039,18 @@ fn ActionsNumberInputI32(
 #[component]
 fn ActionsNumberInputU32(
     label: &'static str,
-    #[props(default = false)] disabled: bool,
-    on_value: EventHandler<u32>,
+    #[props(default)] disabled: bool,
+    on_value: Callback<u32>,
     value: u32,
 ) -> Element {
     rsx! {
-        NumberInputU32 {
-            label,
-            minimum_value: 1,
-            disabled,
-            on_value,
-            value,
+        Labeled { label,
+            PrimitiveIntegerInput {
+                disabled,
+                on_value,
+                value,
+                min_value: 1,
+            }
         }
     }
 }
@@ -1994,16 +2058,13 @@ fn ActionsNumberInputU32(
 #[component]
 fn ActionsMillisInput(
     label: &'static str,
-    #[props(default = false)] disabled: bool,
-    on_value: EventHandler<u64>,
+    #[props(default)] disabled: bool,
+    on_value: Callback<u64>,
     value: u64,
 ) -> Element {
     rsx! {
-        MillisInput {
-            label,
-            disabled,
-            on_value,
-            value,
+        Labeled { label,
+            MillisInput { disabled, on_value, value }
         }
     }
 }
@@ -2011,17 +2072,18 @@ fn ActionsMillisInput(
 #[component]
 fn ActionsCheckbox(
     label: &'static str,
-    #[props(default = false)] disabled: bool,
-    on_value: EventHandler<bool>,
-    value: bool,
+    #[props(default)] tooltip: Option<String>,
+    #[props(default)] disabled: bool,
+    on_checked: Callback<bool>,
+    checked: bool,
 ) -> Element {
     rsx! {
-        Checkbox {
+        Labeled {
             label,
-            input_class: "w-6",
-            disabled,
-            on_value,
-            value,
+            tooltip,
+            tooltip_side: ContentSide::Left,
+            tooltip_align: ContentAlign::End,
+            Checkbox { disabled, on_checked, checked }
         }
     }
 }
@@ -2030,19 +2092,19 @@ fn ActionsCheckbox(
 fn ActionsKeyBindingInput(
     label: &'static str,
     disabled: bool,
-    on_value: EventHandler<Option<KeyBinding>>,
+    on_value: Callback<Option<KeyBinding>>,
     value: Option<KeyBinding>,
 ) -> Element {
     rsx! {
-        KeyBindingInput {
-            label,
-            input_class: "border border-gray-600",
-            disabled,
-            optional: false,
-            on_value: move |value: Option<KeyBinding>| {
-                on_value(value);
-            },
-            value,
+        Labeled { label,
+            KeyInput {
+                class: "border border-primary-border",
+                disabled,
+                on_value: move |value: Option<KeyBinding>| {
+                    on_value(value);
+                },
+                value,
+            }
         }
     }
 }

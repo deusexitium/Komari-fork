@@ -1,8 +1,8 @@
 use std::fs::{self};
 
 use backend::{
-    GameTemplate, Localization as LocalizationData, convert_image_to_base64, query_localization,
-    query_template, upsert_localization,
+    GameTemplate, Localization, convert_image_to_base64, query_localization, query_template,
+    upsert_localization,
 };
 use dioxus::prelude::*;
 use futures_util::{StreamExt, future::OptionFuture};
@@ -10,16 +10,19 @@ use rand::distr::{Alphanumeric, SampleString};
 
 use crate::{
     AppState,
-    button::{Button, ButtonKind},
+    components::{
+        button::{Button, ButtonStyle},
+        section::Section,
+    },
 };
 
 #[derive(Debug)]
 enum LocalizationUpdate {
-    Update(LocalizationData),
+    Update(Localization),
 }
 
 #[component]
-pub fn Localization() -> Element {
+pub fn LocalizationScreen() -> Element {
     let mut localization = use_context::<AppState>().localization;
     let localization_view = use_memo(move || localization().unwrap_or_default());
 
@@ -35,7 +38,7 @@ pub fn Localization() -> Element {
             }
         },
     );
-    let save_localization = use_callback(move |new_localization: LocalizationData| {
+    let save_localization = use_callback(move |new_localization: Localization| {
         coroutine.send(LocalizationUpdate::Update(new_localization));
     });
 
@@ -46,7 +49,7 @@ pub fn Localization() -> Element {
     });
 
     rsx! {
-        div { class: "flex flex-col h-full overflow-y-auto scrollbar",
+        div { class: "flex flex-col h-full overflow-y-auto",
             SectionInfo {}
             SectionPopups { localization_view, save_localization }
             SectionFamiliars { localization_view, save_localization }
@@ -56,33 +59,27 @@ pub fn Localization() -> Element {
 }
 
 #[component]
-fn Section(name: &'static str, children: Element) -> Element {
-    rsx! {
-        div { class: "flex flex-col pr-4 pb-3",
-            div { class: "flex items-center title-xs h-10", {name} }
-            {children}
-        }
-    }
-}
-
-#[component]
 fn SectionInfo() -> Element {
     #[component]
     fn Header(title: &'static str) -> Element {
         rsx! {
-            th { class: "title-xs text-left border-b border-gray-600", {title} }
+            th { class: "text-xs text-primary-text text-left font-medium border-b border-primary-border",
+                {title}
+            }
         }
     }
 
     #[component]
     fn Data(description: &'static str) -> Element {
         rsx! {
-            td { class: "label border-b border-gray-700 text-xs pt-2", {description} }
+            td { class: "text-xs text-secondary-text border-b border-secondary-border pt-2",
+                {description}
+            }
         }
     }
 
     rsx! {
-        Section { name: "Info",
+        Section { title: "Info",
             table { class: "table-fixed",
                 thead {
                     tr {
@@ -135,17 +132,17 @@ fn SectionInfo() -> Element {
 
 #[component]
 fn SectionPopups(
-    localization_view: Memo<LocalizationData>,
-    save_localization: EventHandler<LocalizationData>,
+    localization_view: Memo<Localization>,
+    save_localization: EventHandler<Localization>,
 ) -> Element {
     rsx! {
-        Section { name: "Popups",
+        Section { title: "Popups",
             div { class: "grid grid-cols-2  gap-4",
                 LocalizationTemplateInput {
                     label: "Confirm",
                     template: GameTemplate::PopupConfirm,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             popup_confirm_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -156,7 +153,7 @@ fn SectionPopups(
                     label: "Yes",
                     template: GameTemplate::PopupYes,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             popup_yes_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -167,7 +164,7 @@ fn SectionPopups(
                     label: "Next",
                     template: GameTemplate::PopupNext,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             popup_next_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -178,7 +175,7 @@ fn SectionPopups(
                     label: "End chat",
                     template: GameTemplate::PopupEndChat,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             popup_end_chat_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -189,7 +186,7 @@ fn SectionPopups(
                     label: "Ok (new)",
                     template: GameTemplate::PopupOkNew,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             popup_ok_new_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -200,7 +197,7 @@ fn SectionPopups(
                     label: "Ok (old)",
                     template: GameTemplate::PopupOkOld,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             popup_ok_old_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -211,7 +208,7 @@ fn SectionPopups(
                     label: "Cancel (new)",
                     template: GameTemplate::PopupCancelNew,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             popup_cancel_new_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -222,7 +219,7 @@ fn SectionPopups(
                     label: "Cancel (old)",
                     template: GameTemplate::PopupCancelOld,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             popup_cancel_old_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -236,17 +233,17 @@ fn SectionPopups(
 
 #[component]
 fn SectionFamiliars(
-    localization_view: Memo<LocalizationData>,
-    save_localization: EventHandler<LocalizationData>,
+    localization_view: Memo<Localization>,
+    save_localization: EventHandler<Localization>,
 ) -> Element {
     rsx! {
-        Section { name: "Familiars",
+        Section { title: "Familiars",
             div { class: "grid grid-cols-2 gap-4",
                 LocalizationTemplateInput {
                     label: "Level sort button",
                     template: GameTemplate::FamiliarsLevelSort,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             familiar_level_button_base64: to_base64(image, false).await,
                             ..localization_view()
                         });
@@ -257,7 +254,7 @@ fn SectionFamiliars(
                     label: "Save button",
                     template: GameTemplate::FamiliarsSaveButton,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             familiar_save_button_base64: to_base64(image, false).await,
                             ..localization_view()
                         });
@@ -268,7 +265,7 @@ fn SectionFamiliars(
                     label: "Setup button (unselected)",
                     template: GameTemplate::FamiliarsSetupButton,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             familiar_setup_button_base64: to_base64(image, false).await,
                             ..localization_view()
                         });
@@ -282,17 +279,17 @@ fn SectionFamiliars(
 
 #[component]
 fn SectionOthers(
-    localization_view: Memo<LocalizationData>,
-    save_localization: EventHandler<LocalizationData>,
+    localization_view: Memo<Localization>,
+    save_localization: EventHandler<Localization>,
 ) -> Element {
     rsx! {
-        Section { name: "Others",
+        Section { title: "Others",
             div { class: "grid grid-cols-2 gap-4",
                 LocalizationTemplateInput {
                     label: "Cash shop",
                     template: GameTemplate::CashShop,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             cash_shop_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -303,7 +300,7 @@ fn SectionOthers(
                     label: "Change channel",
                     template: GameTemplate::ChangeChannel,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             change_channel_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -314,7 +311,7 @@ fn SectionOthers(
                     label: "Timer",
                     template: GameTemplate::Timer,
                     on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(LocalizationData {
+                        save_localization(Localization {
                             timer_base64: to_base64(image, true).await,
                             ..localization_view()
                         });
@@ -366,10 +363,10 @@ fn LocalizationTemplateInput(
         div { class: "flex gap-2",
             div { class: "flex-grow",
                 div { class: "flex flex-col gap-1 w-full",
-                    label { class: "label inline-block whitespace-nowrap overflow-hidden text-ellipsis",
+                    label { class: "text-xxs text-secondary-text inline-block whitespace-nowrap overflow-hidden text-ellipsis",
                         {label}
                     }
-                    div { class: "h-6 border-b border-gray-600 pb-0.5",
+                    div { class: "h-6 border-b border-primary-border pb-0.5",
                         img {
                             src: format!("data:image/png;base64,{}", base64()),
                             class: "h-full",
@@ -379,12 +376,13 @@ fn LocalizationTemplateInput(
             }
             div { class: "flex items-end",
                 Button {
-                    label: "Reset",
                     class: "w-14",
-                    kind: ButtonKind::Primary,
+                    style: ButtonStyle::Primary,
                     on_click: move |_| {
                         on_value(None);
                     },
+
+                    "Reset"
                 }
             }
             div { class: "flex items-end",
@@ -405,12 +403,13 @@ fn LocalizationTemplateInput(
                     },
                 }
                 Button {
-                    label: "Replace",
                     class: "w-14",
-                    kind: ButtonKind::Primary,
+                    style: ButtonStyle::Primary,
                     on_click: move |_| {
                         select_file(());
                     },
+
+                    "Replace"
                 }
             }
         }

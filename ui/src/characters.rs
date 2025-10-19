@@ -1,4 +1,4 @@
-use std::{fmt::Display, fs::File, io::BufReader};
+use std::{fmt::Display, fs::File, io::BufReader, mem};
 
 use backend::{
     ActionConfiguration, ActionConfigurationCondition, ActionKeyWith, Character, Class,
@@ -11,33 +11,41 @@ use rand::distr::{Alphanumeric, SampleString};
 
 use crate::{
     AppState,
-    button::{Button, ButtonKind},
-    icons::XIcon,
-    inputs::{Checkbox, KeyBindingInput, MillisInput, NumberInputU32, PercentageInput},
-    popup::Popup,
-    select::{EnumSelect, TextSelect},
+    components::{
+        ContentAlign, ContentSide,
+        button::{Button, ButtonStyle},
+        checkbox::Checkbox,
+        icons::XIcon,
+        key::KeyInput,
+        labeled::Labeled,
+        named_select::NamedSelect,
+        numbers::{MillisInput, PercentageInput, PrimitiveIntegerInput},
+        popup::{PopupContent, PopupContext, PopupTrigger},
+        section::Section,
+        select::{Select, SelectOption},
+    },
 };
 
 #[derive(Debug)]
-enum CharacterUpdate {
+enum CharactersUpdate {
     Set,
     Update(Character),
     Create(String),
     Delete,
 }
 
-#[derive(PartialEq, Clone, Copy, Debug)]
-enum ActionConfigurationInputKind {
-    Add(ActionConfiguration),
-    Edit(ActionConfiguration, usize),
+#[derive(PartialEq, Clone, Copy)]
+struct CharactersContext {
+    character: Memo<Character>,
+    save_character: Callback<Character>,
 }
 
 #[component]
-pub fn Characters() -> Element {
+pub fn CharactersScreen() -> Element {
     let mut character = use_context::<AppState>().character;
     let mut characters = use_resource(async || query_characters().await.unwrap_or_default());
     // Maps queried `characters` to names
-    let character_names = use_memo(move || {
+    let character_names = use_memo::<Vec<String>>(move || {
         characters()
             .unwrap_or_default()
             .into_iter()
@@ -61,7 +69,7 @@ pub fn Characters() -> Element {
 
     // Handles async operations for character-related
     let coroutine = use_coroutine(
-        move |mut rx: UnboundedReceiver<CharacterUpdate>| async move {
+        move |mut rx: UnboundedReceiver<CharactersUpdate>| async move {
             let mut save_character = async move |new_character: Character| {
                 if let Some(new_character) = upsert_character(new_character).await {
                     character.set(Some(new_character));
@@ -71,13 +79,13 @@ pub fn Characters() -> Element {
 
             while let Some(message) = rx.next().await {
                 match message {
-                    CharacterUpdate::Set => {
+                    CharactersUpdate::Set => {
                         update_character(character()).await;
                     }
-                    CharacterUpdate::Update(new_character) => {
+                    CharactersUpdate::Update(new_character) => {
                         save_character(new_character).await;
                     }
-                    CharacterUpdate::Create(name) => {
+                    CharactersUpdate::Create(name) => {
                         save_character(Character {
                             name,
                             ..Character::default()
@@ -85,7 +93,7 @@ pub fn Characters() -> Element {
                         .await;
                         update_character(character()).await;
                     }
-                    CharacterUpdate::Delete => {
+                    CharactersUpdate::Delete => {
                         if let Some(current_character) = character()
                             && delete_character(current_character).await
                         {
@@ -97,17 +105,27 @@ pub fn Characters() -> Element {
             }
         },
     );
+
     let save_character = use_callback(move |new_character: Character| {
-        coroutine.send(CharacterUpdate::Update(new_character));
+        coroutine.send(CharactersUpdate::Update(new_character));
     });
-    let mut action_input_kind = use_signal(|| None);
-    let copy_action = use_callback(move |kind| match kind {
-        ActionConfigurationInputKind::Edit(action, _) => {
-            action_input_kind.set(Some(ActionConfigurationInputKind::Add(action)));
-        }
-        ActionConfigurationInputKind::Add(_) => {
-            unreachable!()
-        }
+
+    let select_character = use_callback(move |index: usize| {
+        let selected = characters
+            .peek()
+            .as_ref()
+            .unwrap()
+            .get(index)
+            .cloned()
+            .unwrap();
+
+        character.set(Some(selected));
+        coroutine.send(CharactersUpdate::Set);
+    });
+
+    use_context_provider(|| CharactersContext {
+        character: character_view,
+        save_character,
     });
 
     // Sets a character if there is not one
@@ -117,197 +135,173 @@ pub fn Characters() -> Element {
             && character.peek().is_none()
         {
             character.set(characters.into_iter().next());
-            coroutine.send(CharacterUpdate::Set);
+            coroutine.send(CharactersUpdate::Set);
         }
     });
 
     rsx! {
-        div { class: "flex flex-col pb-15 h-full overflow-y-auto scrollbar",
-            SectionKeyBindings { character_view, save_character }
-            SectionFeedPet { character_view, save_character }
-            SectionUsePotion { character_view, save_character }
-            SectionUseBooster { character_view, save_character }
-            SectionMovement { character_view, save_character }
-            SectionBuffs { character_view, save_character }
-            SectionFixedActions {
-                action_input_kind,
-                character_view,
-                save_character,
-            }
-            SectionOthers { character_view, save_character }
+        div { class: "flex flex-col pb-15 h-full overflow-y-auto",
+            SectionKeyBindings {}
+            SectionFeedPet {}
+            SectionUsePotion {}
+            SectionUseBooster {}
+            SectionMovement {}
+            SectionBuffs {}
+            SectionFixedActions {}
+            SectionOthers {}
         }
 
-        if let Some(kind) = action_input_kind() {
-            PopupActionConfigurationInput {
-                is_actions_empty: character_view().actions.is_empty(),
-                on_copy: move |_| {
-                    copy_action(kind);
-                },
-                on_cancel: move |_| {
-                    action_input_kind.set(None);
-                },
-                on_value: move |action| {
-                    let Some(mut character) = character.peek().clone() else {
-                        return;
-                    };
-                    match action_input_kind.take().expect("input kind must already be set") {
-                        ActionConfigurationInputKind::Add(_) => character.actions.push(action),
-                        ActionConfigurationInputKind::Edit(_, index) => {
-                            *character.actions.get_mut(index).expect("valid index") = action;
-                        }
-                    };
-                    save_character(character);
-                },
-                kind,
-            }
-        }
-
-        div { class: "flex items-center w-full h-10 bg-gray-950 absolute bottom-0 pr-2",
-            TextSelect {
+        div { class: "flex items-center w-full h-10 bg-primary-surface absolute bottom-0 pr-2",
+            NamedSelect {
                 class: "flex-grow",
-                options: character_names(),
-                disabled: false,
-                placeholder: "Create a character...",
                 on_create: move |name| {
-                    coroutine.send(CharacterUpdate::Create(name));
+                    coroutine.send(CharactersUpdate::Create(name));
                 },
                 on_delete: move |_| {
-                    coroutine.send(CharacterUpdate::Delete);
+                    coroutine.send(CharactersUpdate::Delete);
                 },
-                on_select: move |(index, _)| {
-                    let selected = characters.peek().as_ref().unwrap().get(index).cloned().unwrap();
-                    character.set(Some(selected));
-                    coroutine.send(CharacterUpdate::Set);
-                },
-                selected: character_index(),
+                delete_disabled: character_names().is_empty(),
+
+                Select::<usize> {
+                    class: "w-full",
+                    placeholder: "Create a character...",
+                    disabled: character_names().is_empty(),
+                    on_selected: move |index| {
+                        select_character(index);
+                    },
+
+                    for (i , name) in character_names().into_iter().enumerate() {
+                        SelectOption::<usize> {
+                            value: i,
+                            selected: character_index() == Some(i),
+                            label: name,
+                        }
+                    }
+                }
             }
         }
     }
 }
 
 #[component]
-fn Section(name: &'static str, children: Element) -> Element {
-    rsx! {
-        div { class: "flex flex-col pr-4 pb-3",
-            div { class: "flex items-center title-xs h-10", {name} }
-            {children}
-        }
-    }
-}
+fn SectionKeyBindings() -> Element {
+    let context = use_context::<CharactersContext>();
+    let character = context.character;
+    let save_character = context.save_character;
 
-#[component]
-fn SectionKeyBindings(
-    character_view: Memo<Character>,
-    save_character: Callback<Character>,
-) -> Element {
     rsx! {
-        Section { name: "Key bindings",
+        Section { title: "Key bindings",
             div { class: "grid grid-cols-2 2xl:grid-cols-4 gap-4",
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Rope lift",
                     optional: true,
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
                     on_value: move |ropelift_key| {
                         save_character(Character {
                             ropelift_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().ropelift_key,
+                    value: character().ropelift_key,
                 }
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Teleport",
                     optional: true,
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
                     on_value: move |teleport_key| {
                         save_character(Character {
                             teleport_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().teleport_key,
+                    value: character().teleport_key,
                 }
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Jump",
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
                     on_value: move |key_config: Option<KeyBindingConfiguration>| {
                         save_character(Character {
                             jump_key: key_config.expect("not optional"),
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().jump_key,
+                    value: character().jump_key,
                 }
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Up jump",
                     optional: true,
-                    disabled: character_view().id.is_none(),
+                    tooltip: "This is meant for classes that have a separate skill to up jump. Classes that use up arrow should set this key to up arrow.",
+                    disabled: character().id.is_none(),
                     on_value: move |up_jump_key| {
                         save_character(Character {
                             up_jump_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().up_jump_key,
+                    value: character().up_jump_key,
                 }
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Interact",
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
                     on_value: move |key_config: Option<KeyBindingConfiguration>| {
                         save_character(Character {
                             interact_key: key_config.expect("not optional"),
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().interact_key,
+                    value: character().interact_key,
                 }
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Cash shop",
                     optional: true,
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
+                    tooltip: "Cash shop is used to reset spin rune to a normal rune. This only happens if solving rune fails 8 times consecutively.",
                     on_value: move |cash_shop_key| {
                         save_character(Character {
                             cash_shop_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().cash_shop_key,
+                    value: character().cash_shop_key,
                 }
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "To town",
                     optional: true,
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
+                    tooltip: "This key must be set to use navigation or run/stop cycle features.",
                     on_value: move |to_town_key| {
                         save_character(Character {
                             to_town_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().to_town_key,
+                    value: character().to_town_key,
                 }
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Change channel",
                     optional: true,
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
+                    tooltip: "This key must be set to use panic mode or elite boss spawns behavior features.",
                     on_value: move |change_channel_key| {
                         save_character(Character {
                             change_channel_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().change_channel_key,
+                    value: character().change_channel_key,
                 }
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Familiar menu",
                     optional: true,
-                    disabled: character_view().id.is_none(),
+                    tooltip: "This key must be set to use familiars swapping feature.",
+                    disabled: character().id.is_none(),
                     on_value: move |familiar_menu_key| {
                         save_character(Character {
                             familiar_menu_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().familiar_menu_key,
+                    value: character().familiar_menu_key,
                 }
             }
         }
@@ -315,27 +309,31 @@ fn SectionKeyBindings(
 }
 
 #[component]
-fn SectionFeedPet(character_view: Memo<Character>, save_character: Callback<Character>) -> Element {
+fn SectionFeedPet() -> Element {
+    let context = use_context::<CharactersContext>();
+    let character = context.character;
+    let save_character = context.save_character;
+
     rsx! {
-        Section { name: "Feed pet",
+        Section { title: "Feed pet",
             div { class: "grid grid-cols-3 gap-4",
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Key",
-                    div_class: "col-span-2",
-                    disabled: character_view().id.is_none(),
+                    label_class: "col-span-2",
+                    disabled: character().id.is_none(),
                     on_value: move |key_config: Option<KeyBindingConfiguration>| {
                         save_character(Character {
                             feed_pet_key: key_config.expect("not optional"),
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().feed_pet_key,
+                    value: character().feed_pet_key,
                 }
                 CharactersCheckbox {
                     label: "Enabled",
-                    disabled: character_view().id.is_none(),
-                    on_value: move |enabled| {
-                        let character = character_view.peek().clone();
+                    disabled: character().id.is_none(),
+                    on_checked: move |enabled| {
+                        let character = character.peek().clone();
                         save_character(Character {
                             feed_pet_key: KeyBindingConfiguration {
                                 enabled,
@@ -344,29 +342,29 @@ fn SectionFeedPet(character_view: Memo<Character>, save_character: Callback<Char
                             ..character
                         });
                     },
-                    value: character_view().feed_pet_key.enabled,
+                    checked: character().feed_pet_key.enabled,
                 }
                 CharactersNumberU32Input {
                     label: "Count",
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
                     on_value: move |feed_pet_count| {
                         save_character(Character {
                             feed_pet_count,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().feed_pet_count,
+                    value: character().feed_pet_count,
                 }
                 CharactersMillisInput {
                     label: "Every",
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
                     on_value: move |feed_pet_millis| {
                         save_character(Character {
                             feed_pet_millis,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().feed_pet_millis,
+                    value: character().feed_pet_millis,
                 }
             }
         }
@@ -374,30 +372,31 @@ fn SectionFeedPet(character_view: Memo<Character>, save_character: Callback<Char
 }
 
 #[component]
-fn SectionUsePotion(
-    character_view: Memo<Character>,
-    save_character: Callback<Character>,
-) -> Element {
+fn SectionUsePotion() -> Element {
+    let context = use_context::<CharactersContext>();
+    let character = context.character;
+    let save_character = context.save_character;
+
     rsx! {
-        Section { name: "Use potion",
+        Section { title: "Use potion",
             div { class: "grid grid-cols-3 gap-4",
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "Key",
-                    div_class: "col-span-2",
-                    disabled: character_view().id.is_none(),
+                    label_class: "col-span-2",
+                    disabled: character().id.is_none(),
                     on_value: move |key_config: Option<KeyBindingConfiguration>| {
                         save_character(Character {
                             potion_key: key_config.expect("not optional"),
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().potion_key,
+                    value: character().potion_key,
                 }
                 CharactersCheckbox {
                     label: "Enabled",
-                    disabled: character_view().id.is_none(),
-                    on_value: move |enabled| {
-                        let character = character_view.peek().clone();
+                    disabled: character().id.is_none(),
+                    on_checked: move |enabled| {
+                        let character = character.peek().clone();
                         save_character(Character {
                             potion_key: KeyBindingConfiguration {
                                 enabled,
@@ -406,28 +405,28 @@ fn SectionUsePotion(
                             ..character
                         });
                     },
-                    value: character_view().potion_key.enabled,
+                    checked: character().potion_key.enabled,
                 }
                 CharactersSelect::<PotionMode> {
                     label: "Mode",
-                    disabled: character_view().id.is_none(),
-                    on_select: move |potion_mode| {
+                    disabled: character().id.is_none(),
+                    on_selected: move |potion_mode| {
                         save_character(Character {
                             potion_mode,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    selected: character_view().potion_mode,
+                    selected: character().potion_mode,
                 }
-                match character_view().potion_mode {
+                match character().potion_mode {
                     PotionMode::EveryMillis(millis) => rsx! {
                         CharactersMillisInput {
                             label: "Every",
-                            disabled: character_view().id.is_none(),
+                            disabled: character().id.is_none(),
                             on_value: move |millis| {
                                 save_character(Character {
                                     potion_mode: PotionMode::EveryMillis(millis),
-                                    ..character_view.peek().clone()
+                                    ..character.peek().clone()
                                 });
                             },
                             value: millis,
@@ -437,25 +436,25 @@ fn SectionUsePotion(
                         div { class: "grid grid-cols-2 col-span-2 gap-2",
                             CharactersPercentageInput {
                                 label: "Below health",
-                                disabled: character_view().id.is_none(),
+                                disabled: character().id.is_none(),
                                 on_value: move |percent| {
                                     save_character(Character {
-                                        potion_mode: PotionMode::Percentage(percent),
-                                        ..character_view.peek().clone()
+                                        potion_mode: PotionMode::Percentage(percent as f32),
+                                        ..character.peek().clone()
                                     });
                                 },
-                                value: percent,
+                                value: percent as u32,
                             }
                             CharactersMillisInput {
                                 label: "Health update every",
-                                disabled: character_view().id.is_none(),
+                                disabled: character().id.is_none(),
                                 on_value: move |millis| {
                                     save_character(Character {
                                         health_update_millis: millis,
-                                        ..character_view.peek().clone()
+                                        ..character.peek().clone()
                                     });
                                 },
-                                value: character_view().health_update_millis,
+                                value: character().health_update_millis,
                             }
                         }
                     },
@@ -466,30 +465,31 @@ fn SectionUsePotion(
 }
 
 #[component]
-fn SectionUseBooster(
-    character_view: Memo<Character>,
-    save_character: Callback<Character>,
-) -> Element {
+fn SectionUseBooster() -> Element {
+    let context = use_context::<CharactersContext>();
+    let character = context.character;
+    let save_character = context.save_character;
+
     rsx! {
-        Section { name: "Use booster",
+        Section { title: "Use booster",
             div { class: "grid grid-cols-3 gap-4",
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label: "VIP Booster key",
-                    div_class: "col-span-2",
-                    disabled: character_view().id.is_none(),
+                    value: character().vip_booster_key,
                     on_value: move |key_config: Option<KeyBindingConfiguration>| {
                         save_character(Character {
                             vip_booster_key: key_config.expect("not optional"),
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().vip_booster_key,
+                    disabled: character().id.is_none(),
+                    label_class: "col-span-2",
                 }
                 CharactersCheckbox {
                     label: "Enabled",
-                    disabled: character_view().id.is_none(),
-                    on_value: move |enabled| {
-                        let character = character_view.peek().clone();
+                    checked: character().vip_booster_key.enabled,
+                    on_checked: move |enabled| {
+                        let character = character.peek().clone();
                         save_character(Character {
                             vip_booster_key: KeyBindingConfiguration {
                                 enabled,
@@ -498,7 +498,7 @@ fn SectionUseBooster(
                             ..character
                         });
                     },
-                    value: character_view().vip_booster_key.enabled,
+                    disabled: character().id.is_none(),
                 }
             }
         }
@@ -506,67 +506,74 @@ fn SectionUseBooster(
 }
 
 #[component]
-fn SectionMovement(
-    character_view: Memo<Character>,
-    save_character: Callback<Character>,
-) -> Element {
+fn SectionMovement() -> Element {
+    let context = use_context::<CharactersContext>();
+    let character = context.character;
+    let save_character = context.save_character;
+    let disabled = use_memo(move || character().id.is_none());
+
     rsx! {
-        Section { name: "Movement",
+        Section { title: "Movement",
             div { class: "grid grid-cols-3 gap-4",
                 CharactersCheckbox {
                     label: "Up jump is flight",
-                    disabled: character_view().id.is_none(),
-                    on_value: move |up_jump_is_flight| {
+                    on_checked: move |up_jump_is_flight| {
                         save_character(Character {
                             up_jump_is_flight,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().up_jump_is_flight,
+                    checked: character().up_jump_is_flight,
+                    tooltip: "Applicable only to mage class or when non-up-arrow up jump key is set.",
+                    disabled,
                 }
                 CharactersCheckbox {
                     label: "Jump then up jump if possible",
-                    disabled: character_view().id.is_none(),
-                    on_value: move |up_jump_specific_key_should_jump| {
+                    on_checked: move |up_jump_specific_key_should_jump| {
                         save_character(Character {
                             up_jump_specific_key_should_jump,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().up_jump_specific_key_should_jump,
+                    checked: character().up_jump_specific_key_should_jump,
+                    tooltip: "Applicable only for non-mage class and when non-up-arrow up jump key is set.",
+                    disabled,
                 }
                 CharactersCheckbox {
                     label: "Disable teleport on fall",
-                    disabled: character_view().id.is_none(),
-                    on_value: move |disable_teleport_on_fall| {
+                    on_checked: move |disable_teleport_on_fall| {
                         save_character(Character {
                             disable_teleport_on_fall,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().disable_teleport_on_fall,
+                    checked: character().disable_teleport_on_fall,
+                    tooltip: "Applicable only to mage class.",
+                    disabled,
                 }
                 CharactersCheckbox {
                     label: "Disable double jumping",
-                    disabled: character_view().id.is_none(),
-                    on_value: move |disable_double_jumping| {
+                    on_checked: move |disable_double_jumping| {
                         save_character(Character {
                             disable_double_jumping,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().disable_double_jumping,
+                    checked: character().disable_double_jumping,
+                    tooltip: "Not applicable if an action requires double jumping.",
+                    disabled,
                 }
                 CharactersCheckbox {
                     label: "Disable walking",
-                    disabled: character_view().id.is_none(),
-                    on_value: move |disable_adjusting| {
+                    checked: character().disable_adjusting,
+                    on_checked: move |disable_adjusting| {
                         save_character(Character {
                             disable_adjusting,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().disable_adjusting,
+                    tooltip: "Not applicable if an action requires adjusting.",
+                    disabled,
                 }
             }
         }
@@ -574,73 +581,78 @@ fn SectionMovement(
 }
 
 #[component]
-fn SectionBuffs(character_view: Memo<Character>, save_character: Callback<Character>) -> Element {
+fn SectionBuffs() -> Element {
     #[component]
     fn Buff(
         label: &'static str,
-        disabled: bool,
-        on_value: EventHandler<KeyBindingConfiguration>,
         value: KeyBindingConfiguration,
+        on_value: Callback<KeyBindingConfiguration>,
+        disabled: ReadOnlySignal<bool>,
     ) -> Element {
         rsx! {
             div { class: "flex gap-2",
-                KeyBindingConfigurationInput {
+                CharactersKeyBindingConfigurationInput {
                     label,
-                    div_class: "flex-1",
-                    disabled,
+                    value: Some(value),
                     on_value: move |config: Option<KeyBindingConfiguration>| {
                         on_value(config.expect("not optional"));
                     },
-                    value: Some(value),
+                    disabled,
+                    label_class: "flex-1",
                 }
                 CharactersCheckbox {
                     label: "Enabled",
-                    disabled,
-                    on_value: move |enabled| {
+                    checked: value.enabled,
+                    on_checked: move |enabled| {
                         on_value(KeyBindingConfiguration {
                             enabled,
                             ..value
                         });
                     },
-                    value: value.enabled,
+                    disabled,
                 }
             }
         }
     }
 
+    let context = use_context::<CharactersContext>();
+    let character = context.character;
+    let save_character = context.save_character;
+    let disabled = use_memo(move || character().id.is_none());
+
     rsx! {
-        Section { name: "Buffs",
+        Section { title: "Buffs",
             div { class: "grid grid-cols-2 xl:grid-cols-4 gap-4",
                 div { class: "col-span-full flex gap-2",
-                    KeyBindingConfigurationInput {
+                    CharactersKeyBindingConfigurationInput {
                         label: "Familiar skill",
-                        div_class: "flex-grow",
-                        disabled: character_view().id.is_none(),
+                        label_class: "flex-1",
+                        disabled,
                         on_value: move |key_config: Option<KeyBindingConfiguration>| {
                             save_character(Character {
                                 familiar_buff_key: key_config.expect("not optional"),
-                                ..character_view.peek().clone()
+                                ..character.peek().clone()
                             });
                         },
-                        value: character_view().familiar_buff_key,
+                        value: character().familiar_buff_key,
                     }
-                    KeyBindingConfigurationInput {
+                    CharactersKeyBindingConfigurationInput {
                         label: "Familiar essence",
-                        div_class: "flex-grow",
-                        disabled: character_view().id.is_none(),
+                        label_class: "flex-1",
+                        disabled,
                         on_value: move |key_config: Option<KeyBindingConfiguration>| {
                             save_character(Character {
                                 familiar_essence_key: key_config.expect("not optional"),
-                                ..character_view.peek().clone()
+                                ..character.peek().clone()
                             });
                         },
-                        value: character_view().familiar_essence_key,
+                        value: character().familiar_essence_key,
                     }
                     CharactersCheckbox {
                         label: "Enabled",
-                        disabled: character_view().id.is_none(),
-                        on_value: move |enabled| {
-                            let character = character_view.peek().clone();
+                        checked: character().familiar_buff_key.enabled,
+                        on_checked: move |enabled| {
+                            let character = character.peek().clone();
                             save_character(Character {
                                 familiar_buff_key: KeyBindingConfiguration {
                                     enabled,
@@ -649,206 +661,207 @@ fn SectionBuffs(character_view: Memo<Character>, save_character: Callback<Charac
                                 ..character
                             });
                         },
-                        value: character_view().familiar_buff_key.enabled,
+                        disabled,
                     }
                 }
                 Buff {
                     label: "Sayram's Elixir",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |sayram_elixir_key| {
                         save_character(Character {
                             sayram_elixir_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().sayram_elixir_key,
+                    value: character().sayram_elixir_key,
                 }
                 Buff {
                     label: "Aurelia's Elixir",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |aurelia_elixir_key| {
                         save_character(Character {
                             aurelia_elixir_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().aurelia_elixir_key,
+                    value: character().aurelia_elixir_key,
                 }
                 Buff {
                     label: "2x EXP Coupon",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |exp_x2_key| {
                         save_character(Character {
                             exp_x2_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().exp_x2_key,
+                    value: character().exp_x2_key,
                 }
                 Buff {
                     label: "3x EXP Coupon",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |exp_x3_key| {
                         save_character(Character {
                             exp_x3_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().exp_x3_key,
+                    value: character().exp_x3_key,
                 }
                 Buff {
                     label: "4x EXP Coupon",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |exp_x4_key| {
                         save_character(Character {
                             exp_x4_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().exp_x4_key,
+                    value: character().exp_x4_key,
                 }
                 Buff {
                     label: "50% Bonus EXP Coupon",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |bonus_exp_key| {
                         save_character(Character {
                             bonus_exp_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().bonus_exp_key,
+                    value: character().bonus_exp_key,
                 }
                 Buff {
                     label: "Legion's Wealth",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |legion_wealth_key| {
                         save_character(Character {
                             legion_wealth_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().legion_wealth_key,
+                    value: character().legion_wealth_key,
                 }
                 Buff {
                     label: "Legion's Luck",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |legion_luck_key| {
                         save_character(Character {
                             legion_luck_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().legion_luck_key,
+                    value: character().legion_luck_key,
                 }
                 Buff {
                     label: "Wealth Acquisition Potion",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |wealth_acquisition_potion_key| {
                         save_character(Character {
                             wealth_acquisition_potion_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().wealth_acquisition_potion_key,
+                    value: character().wealth_acquisition_potion_key,
                 }
                 Buff {
                     label: "EXP Accumulation Potion",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |exp_accumulation_potion_key| {
                         save_character(Character {
                             exp_accumulation_potion_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().exp_accumulation_potion_key,
+                    value: character().exp_accumulation_potion_key,
                 }
                 Buff {
                     label: "Small Wealth Acquisition Potion",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |small_wealth_acquisition_potion_key| {
                         save_character(Character {
                             small_wealth_acquisition_potion_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().small_wealth_acquisition_potion_key,
+                    value: character().small_wealth_acquisition_potion_key,
                 }
                 Buff {
                     label: "Small EXP Accumulation Potion",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |small_exp_accumulation_potion_key| {
                         save_character(Character {
                             small_exp_accumulation_potion_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().small_exp_accumulation_potion_key,
+                    value: character().small_exp_accumulation_potion_key,
                 }
                 Buff {
                     label: "For The Guild",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |for_the_guild_key| {
                         save_character(Character {
                             for_the_guild_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().for_the_guild_key,
+                    value: character().for_the_guild_key,
                 }
                 Buff {
                     label: "Hard Hitter",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |hard_hitter_key| {
                         save_character(Character {
                             hard_hitter_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().hard_hitter_key,
+                    value: character().hard_hitter_key,
                 }
                 Buff {
                     label: "Extreme Red Potion",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |extreme_red_potion_key| {
                         save_character(Character {
                             extreme_red_potion_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().extreme_red_potion_key,
+                    value: character().extreme_red_potion_key,
                 }
                 Buff {
                     label: "Extreme Blue Potion",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |extreme_blue_potion_key| {
                         save_character(Character {
                             extreme_blue_potion_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().extreme_blue_potion_key,
+                    value: character().extreme_blue_potion_key,
                 }
                 Buff {
                     label: "Extreme Green Potion",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |extreme_green_potion_key| {
                         save_character(Character {
                             extreme_green_potion_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().extreme_green_potion_key,
+                    value: character().extreme_green_potion_key,
                 }
+
                 Buff {
                     label: "Extreme Gold Potion",
-                    disabled: character_view().id.is_none(),
+                    disabled,
                     on_value: move |extreme_gold_potion_key| {
                         save_character(Character {
                             extreme_gold_potion_key,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: character_view().extreme_gold_potion_key,
+                    value: character().extreme_gold_potion_key,
                 }
             }
         }
@@ -856,46 +869,58 @@ fn SectionBuffs(character_view: Memo<Character>, save_character: Callback<Charac
 }
 
 #[component]
-fn SectionFixedActions(
-    action_input_kind: Signal<Option<ActionConfigurationInputKind>>,
-    character_view: Memo<Character>,
-    save_character: Callback<Character>,
-) -> Element {
+fn SectionFixedActions() -> Element {
+    let context = use_context::<CharactersContext>();
+    let character = context.character;
+    let save_character = context.save_character;
+
+    let add_action = use_callback(move |action| {
+        let mut character = character.peek().clone();
+
+        character.actions.push(action);
+        save_character(character);
+    });
+    let edit_action = use_callback::<(ActionConfiguration, usize), _>(move |(action, index)| {
+        let mut character = character.peek().clone();
+        let current_action = character.actions.get_mut(index).unwrap();
+
+        *current_action = action;
+        save_character(character);
+    });
     let delete_action = use_callback(move |index| {
-        let mut character = character_view.peek().clone();
+        let mut character = character.peek().clone();
+
         character.actions.remove(index);
         save_character(character);
     });
-    let toggle_action = use_callback(move |(enabled, index): (bool, usize)| {
-        let mut character = character_view.peek().clone();
+    let toggle_action = use_callback::<(bool, usize), _>(move |(enabled, index)| {
+        let mut character = character.peek().clone();
         let action = character.actions.get_mut(index).unwrap();
+
         action.enabled = enabled;
         save_character(character);
     });
 
     rsx! {
-        Section { name: "Fixed actions",
+        Section { title: "Fixed actions",
             ActionConfigurationList {
-                disabled: character_view().id.is_none(),
-                on_add_click: move |_| {
-                    action_input_kind
-                        .set(
-                            Some(ActionConfigurationInputKind::Add(ActionConfiguration::default())),
-                        );
-                },
-                on_item_click: move |(action, index)| {
-                    action_input_kind.set(Some(ActionConfigurationInputKind::Edit(action, index)));
-                },
+                disabled: character().id.is_none(),
+                on_item_add: add_action,
+                on_item_edit: edit_action,
                 on_item_delete: delete_action,
                 on_item_toggle: toggle_action,
-                actions: character_view().actions,
+                actions: character().actions,
             }
         }
     }
 }
 
 #[component]
-fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Character>) -> Element {
+fn SectionOthers() -> Element {
+    let context = use_context::<CharactersContext>();
+    let character = context.character;
+    let save_character = context.save_character;
+
     let export_element_id = use_memo(|| Alphanumeric.sample_string(&mut rand::rng(), 8));
     let export = use_callback(move |_| {
         let js = format!(
@@ -913,7 +938,7 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
             export_element_id(),
         );
         let eval = document::eval(js.as_str());
-        let Ok(json) = serde_json::to_string_pretty(&*character_view.peek()) else {
+        let Ok(json) = serde_json::to_string_pretty(&*character.peek()) else {
             return;
         };
         let _ = eval.send(json);
@@ -947,42 +972,42 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
     });
 
     rsx! {
-        Section { name: "Others",
+        Section { title: "Others",
             div { class: "grid grid-cols-[auto_auto_128px] gap-4",
                 CharactersSelect::<Class> {
                     label: "Link key timing class",
-                    disabled: character_view().id.is_none(),
-                    on_select: move |class| {
+                    disabled: character().id.is_none(),
+                    on_selected: move |class| {
                         save_character(Character {
                             class,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    selected: character_view().class,
+                    selected: character().class,
                 }
                 div {}
                 div {}
                 CharactersSelect::<EliteBossBehavior> {
                     label: "Elite boss spawns behavior",
-                    disabled: character_view().id.is_none(),
-                    on_select: move |elite_boss_behavior| {
+                    disabled: character().id.is_none(),
+                    on_selected: move |elite_boss_behavior| {
                         save_character(Character {
                             elite_boss_behavior,
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    selected: character_view().elite_boss_behavior,
+                    selected: character().elite_boss_behavior,
                 }
-                KeyBindingInput {
+                CharactersKeyInput {
                     label: "Key to use",
-                    disabled: character_view().id.is_none(),
+                    disabled: character().id.is_none(),
                     on_value: move |key: Option<KeyBinding>| {
                         save_character(Character {
                             elite_boss_behavior_key: key.expect("not optional"),
-                            ..character_view.peek().clone()
+                            ..character.peek().clone()
                         });
                     },
-                    value: Some(character_view().elite_boss_behavior_key),
+                    value: Some(character().elite_boss_behavior_key),
                 }
                 div {}
                 div { class: "flex gap-2 col-span-3",
@@ -993,11 +1018,10 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
                         }
                         Button {
                             class: "w-full",
-                            label: "Export",
-                            kind: ButtonKind::Primary,
                             on_click: move |_| {
                                 export(());
                             },
+                            "Export"
                         }
                     }
                     div { class: "flex-grow",
@@ -1015,11 +1039,10 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
                         }
                         Button {
                             class: "w-full",
-                            label: "Import",
-                            kind: ButtonKind::Primary,
                             on_click: move |_| {
                                 import(());
                             },
+                            "Import"
                         }
                     }
                 }
@@ -1029,143 +1052,14 @@ fn SectionOthers(character_view: Memo<Character>, save_character: Callback<Chara
 }
 
 #[component]
-fn KeyBindingConfigurationInput(
-    label: &'static str,
-    #[props(default = String::default())] div_class: String,
-    #[props(default = false)] optional: bool,
-    disabled: bool,
-    on_value: EventHandler<Option<KeyBindingConfiguration>>,
-    value: Option<KeyBindingConfiguration>,
+fn PopupActionConfigurationContent(
+    modifying: bool,
+    can_create_linked_action: bool,
+    on_copy: Callback,
+    on_cancel: Callback,
+    on_value: Callback<ActionConfiguration>,
+    value: Option<ActionConfiguration>,
 ) -> Element {
-    let label = if optional {
-        format!("{label} (optional)")
-    } else {
-        label.to_string()
-    };
-
-    rsx! {
-        KeyBindingInput {
-            label,
-            div_class,
-            optional,
-            disabled,
-            on_value: move |new_value: Option<KeyBinding>| {
-                let new_value = new_value
-                    .map(|key| {
-                        let mut config = value.unwrap_or_default();
-                        config.key = key;
-                        config
-                    });
-                on_value(new_value);
-            },
-            value: value.map(|config| config.key),
-        }
-    }
-}
-
-#[component]
-fn CharactersCheckbox(
-    label: &'static str,
-    #[props(default = String::default())] label_class: String,
-    #[props(default = String::default())] div_class: String,
-    #[props(default = false)] disabled: bool,
-    on_value: EventHandler<bool>,
-    value: bool,
-) -> Element {
-    rsx! {
-        Checkbox {
-            label,
-            label_class,
-            input_class: "w-6",
-            div_class,
-            disabled,
-            on_value,
-            value,
-        }
-    }
-}
-
-#[component]
-fn CharactersSelect<T: 'static + Clone + PartialEq + Display + IntoEnumIterator>(
-    label: &'static str,
-    #[props(default = false)] disabled: bool,
-    on_select: EventHandler<T>,
-    selected: T,
-) -> Element {
-    rsx! {
-        EnumSelect {
-            label,
-            disabled,
-            on_select,
-            selected,
-        }
-    }
-}
-
-#[component]
-fn CharactersPercentageInput(
-    label: &'static str,
-    disabled: bool,
-    on_value: EventHandler<f32>,
-    value: f32,
-) -> Element {
-    rsx! {
-        PercentageInput { label, on_value, value }
-    }
-}
-
-#[component]
-fn CharactersMillisInput(
-    label: &'static str,
-    #[props(default = false)] disabled: bool,
-    on_value: EventHandler<u64>,
-    value: u64,
-) -> Element {
-    rsx! {
-        MillisInput {
-            label,
-            disabled,
-            on_value,
-            value,
-        }
-    }
-}
-
-#[component]
-fn CharactersNumberU32Input(
-    label: &'static str,
-    #[props(default = false)] disabled: bool,
-    on_value: EventHandler<u32>,
-    value: u32,
-) -> Element {
-    rsx! {
-        NumberInputU32 {
-            label,
-            minimum_value: 1,
-            disabled,
-            on_value,
-            value,
-        }
-    }
-}
-
-#[component]
-fn PopupActionConfigurationInput(
-    is_actions_empty: bool,
-    on_copy: EventHandler,
-    on_cancel: EventHandler,
-    on_value: EventHandler<ActionConfiguration>,
-    kind: ActionConfigurationInputKind,
-) -> Element {
-    let (action, index) = match kind {
-        ActionConfigurationInputKind::Add(action) => (action, None),
-        ActionConfigurationInputKind::Edit(action, index) => (action, Some(index)),
-    };
-    let modifying = matches!(kind, ActionConfigurationInputKind::Edit(_, _));
-    let can_create_linked_action = match action.condition {
-        ActionConfigurationCondition::EveryMillis(_) => !is_actions_empty && index != Some(0),
-        ActionConfigurationCondition::Linked => false,
-    };
     let section_text = if modifying {
         "Modify a fixed action".to_string()
     } else {
@@ -1173,15 +1067,14 @@ fn PopupActionConfigurationInput(
     };
 
     rsx! {
-        // TODO: Use Popup's buttons
-        Popup { title: section_text, class: "min-w-120 max-w-120 max-h-100",
+        PopupContent { title: section_text,
             ActionConfigurationInput {
                 modifying,
                 can_create_linked_action,
                 on_copy,
                 on_cancel,
                 on_value,
-                value: action,
+                value: value.unwrap_or_default(),
             }
         }
     }
@@ -1191,9 +1084,9 @@ fn PopupActionConfigurationInput(
 fn ActionConfigurationInput(
     modifying: bool,
     can_create_linked_action: bool,
-    on_copy: EventHandler<()>,
-    on_cancel: EventHandler,
-    on_value: EventHandler<ActionConfiguration>,
+    on_copy: Callback,
+    on_cancel: Callback,
+    on_value: Callback<ActionConfiguration>,
     value: ActionConfiguration,
 ) -> Element {
     let mut action = use_signal(|| value);
@@ -1202,41 +1095,42 @@ fn ActionConfigurationInput(
         ActionConfigurationCondition::Linked => None,
     });
 
-    use_effect(use_reactive!(|value| { action.set(value) }));
-
     rsx! {
-        div { class: "grid grid-cols-3 gap-3 pb-10 overflow-y-auto scrollbar",
+        div { class: "grid grid-cols-3 gap-3 pb-10 overflow-y-auto",
             if modifying {
-                Button {
-                    label: "Copy",
-                    kind: ButtonKind::Primary,
-                    on_click: on_copy,
-                    class: "label border-b border-gray-600 col-span-3",
+                div { class: "flex flex-col col-span-3",
+                    Button {
+                        style: ButtonStyle::Primary,
+                        on_click: on_copy,
+                        class: "col-span-3",
+                        "Copy"
+                    }
+                    div { class: "border-b border-primary-border" }
                 }
             }
             // Key, count and link key
-            KeyBindingInput {
+            CharactersKeyInput {
                 label: "Key",
-                input_class: "border border-gray-600",
+                input_class: "border border-primary-border",
                 on_value: move |key: Option<KeyBinding>| {
                     let mut action = action.write();
                     action.key = key.expect("not optional");
                 },
                 value: Some(action().key),
             }
-            NumberInputU32 {
+            CharactersNumberU32Input {
                 label: "Use count",
                 on_value: move |count| {
                     let mut action = action.write();
                     action.count = count;
                 },
-                minimum_value: 1,
                 value: action().count,
             }
             if can_create_linked_action {
                 CharactersCheckbox {
                     label: "Linked action",
-                    on_value: move |is_linked: bool| {
+                    checked: matches!(action().condition, ActionConfigurationCondition::Linked),
+                    on_checked: move |is_linked: bool| {
                         let mut action = action.write();
                         action.condition = if is_linked {
                             ActionConfigurationCondition::Linked
@@ -1244,14 +1138,13 @@ fn ActionConfigurationInput(
                             value.condition
                         };
                     },
-                    value: matches!(action().condition, ActionConfigurationCondition::Linked),
                 }
             } else {
                 div {} // Spacer
             }
-            KeyBindingInput {
+            CharactersKeyInput {
                 label: "Link key",
-                input_class: "border border-gray-600",
+                input_class: "border border-primary-border",
                 disabled: action().link_key.is_none(),
                 on_value: move |key: Option<KeyBinding>| {
                     let mut action = action.write();
@@ -1264,7 +1157,7 @@ fn ActionConfigurationInput(
             CharactersSelect::<LinkKeyBinding> {
                 label: "Link key type",
                 disabled: action().link_key.is_none(),
-                on_select: move |link_key: LinkKeyBinding| {
+                on_selected: move |link_key: LinkKeyBinding| {
                     let mut action = action.write();
                     action.link_key = Some(
                         link_key.with_key(action.link_key.expect("has link key if selectable").key()),
@@ -1274,17 +1167,17 @@ fn ActionConfigurationInput(
             }
             CharactersCheckbox {
                 label: "Has link key",
-                on_value: move |has_link_key: bool| {
+                checked: action().link_key.is_some(),
+                on_checked: move |has_link_key: bool| {
                     let mut action = action.write();
                     action.link_key = has_link_key.then_some(LinkKeyBinding::default());
                 },
-                value: action().link_key.is_some(),
             }
 
             // Use with
             CharactersSelect::<ActionKeyWith> {
                 label: "Use with",
-                on_select: move |with| {
+                on_selected: move |with| {
                     let mut action = action.write();
                     action.with = with;
                 },
@@ -1340,22 +1233,26 @@ fn ActionConfigurationInput(
                 value: action().wait_after_millis_random_range,
             }
         }
-        div { class: "flex w-full gap-3 absolute bottom-0 py-2 bg-gray-900",
+        div { class: "flex w-full gap-3 absolute bottom-0 py-2 bg-secondary-surface",
             Button {
-                class: "flex-grow border border-gray-600",
-                label: if modifying { "Save" } else { "Add" },
-                kind: ButtonKind::Primary,
+                class: "flex-grow",
+                style: ButtonStyle::OutlinePrimary,
                 on_click: move |_| {
                     on_value(*action.peek());
                 },
+                if modifying {
+                    "Save"
+                } else {
+                    "Add"
+                }
             }
             Button {
-                class: "flex-grow border border-gray-600",
-                label: "Cancel",
-                kind: ButtonKind::Secondary,
+                class: "flex-grow",
+                style: ButtonStyle::OutlineSecondary,
                 on_click: move |_| {
                     on_cancel(());
                 },
+                "Cancel"
             }
         }
     }
@@ -1364,76 +1261,139 @@ fn ActionConfigurationInput(
 #[component]
 fn ActionConfigurationList(
     disabled: bool,
-    on_add_click: EventHandler,
-    on_item_click: EventHandler<(ActionConfiguration, usize)>,
-    on_item_delete: EventHandler<usize>,
-    on_item_toggle: EventHandler<(bool, usize)>,
+    on_item_add: Callback<ActionConfiguration>,
+    on_item_edit: Callback<(ActionConfiguration, usize)>,
+    on_item_delete: Callback<usize>,
+    on_item_toggle: Callback<(bool, usize)>,
     actions: Vec<ActionConfiguration>,
 ) -> Element {
     #[component]
-    fn Icons(condition: ActionConfigurationCondition, on_item_delete: EventHandler) -> Element {
-        const ICON_CONTAINER_CLASS: &str = "w-4 h-6 flex justify-center items-center";
-        const ICON_CLASS: &str = "w-[11px] h-[11px] fill-current";
-
+    fn Icons(condition: ActionConfigurationCondition, on_item_delete: Callback) -> Element {
         let container_margin = if matches!(condition, ActionConfigurationCondition::Linked) {
             ""
         } else {
             "mt-2"
         };
+
         rsx! {
-            div { class: "absolute invisible group-hover:visible top-0 right-1 flex {container_margin}",
+            div { class: "self-stretch invisible group-hover:visible group-hover:bg-secondary-surface flex items-center {container_margin} pr-1",
                 div {
-                    class: ICON_CONTAINER_CLASS,
+                    class: "size-fit",
                     onclick: move |e| {
                         e.stop_propagation();
                         on_item_delete(());
                     },
-                    XIcon { class: "{ICON_CLASS} text-red-500" }
+                    XIcon { class: "size-3" }
                 }
             }
         }
     }
 
+    #[derive(PartialEq, Clone)]
+    enum PopupContent {
+        None,
+        Add(ActionConfiguration),
+        Edit {
+            action: ActionConfiguration,
+            index: usize,
+        },
+    }
+
+    let mut popup_content = use_signal(|| PopupContent::None);
+    let mut popup_open = use_signal(|| false);
+
     rsx! {
-        div { class: "flex flex-col",
-            for (index , action) in actions.into_iter().enumerate() {
-                div { class: "flex items-end",
-                    div {
-                        class: "relative group flex-grow",
-                        onclick: move |e| {
-                            e.stop_propagation();
-                            on_item_click((action, index));
-                        },
-                        ActionConfigurationItem { action }
-                        Icons {
-                            condition: action.condition,
-                            on_item_delete: move |_| {
-                                on_item_delete(index);
+        PopupContext {
+            open: popup_open,
+            on_open: move |open| {
+                popup_open.set(open);
+            },
+
+            div { class: "flex flex-col",
+                for (index , action) in actions.clone().into_iter().enumerate() {
+                    div { class: "flex items-end",
+                        div {
+                            class: "flex group flex-grow",
+                            onclick: move |_| {
+                                popup_content
+                                    .set(PopupContent::Edit {
+                                        action,
+                                        index,
+                                    });
                             },
-                        }
-                    }
-                    div { class: "w-8 flex flex-col items-end",
-                        if !matches!(action.condition, ActionConfigurationCondition::Linked) {
-                            CharactersCheckbox {
-                                label: "",
-                                label_class: "collapse",
-                                on_value: move |enabled| {
-                                    on_item_toggle((enabled, index));
+
+                            PopupTrigger { class: "flex-grow",
+                                ActionConfigurationItem { action }
+                            }
+
+                            Icons {
+                                condition: action.condition,
+                                on_item_delete: move |_| {
+                                    on_item_delete(index);
                                 },
-                                value: action.enabled,
+                            }
+                        }
+
+                        div { class: "w-8 flex flex-col items-end",
+                            if !matches!(action.condition, ActionConfigurationCondition::Linked) {
+                                Checkbox {
+                                    on_checked: move |enabled| {
+                                        on_item_toggle((enabled, index));
+                                    },
+                                    checked: action.enabled,
+                                }
                             }
                         }
                     }
                 }
             }
-            Button {
-                label: "Add action",
-                kind: ButtonKind::Secondary,
-                disabled,
-                on_click: move |_| {
-                    on_add_click(());
+
+            PopupTrigger {
+                Button {
+                    style: ButtonStyle::Secondary,
+                    class: "w-full mt-2",
+                    on_click: move |_| {
+                        popup_content.set(PopupContent::Add(ActionConfiguration::default()));
+                    },
+                    disabled,
+                    "Add action"
+                }
+            }
+
+            PopupActionConfigurationContent {
+                modifying: matches!(popup_content(), PopupContent::Edit { .. }),
+                can_create_linked_action: match popup_content() {
+                    PopupContent::None | PopupContent::Add(_) => false,
+                    PopupContent::Edit { index, .. } => index != 0,
                 },
-                class: "label mt-2",
+                on_copy: move |_| {
+                    let content = popup_content.peek().clone();
+                    match content {
+                        PopupContent::Add(_) | PopupContent::None => unreachable!(),
+                        PopupContent::Edit { action, .. } => {
+                            popup_content.set(PopupContent::Add(action));
+                        }
+                    }
+                },
+                on_cancel: move |_| {
+                    popup_open.set(false);
+                },
+                on_value: move |value| {
+                    match popup_content.peek().clone() {
+                        PopupContent::None => unreachable!(),
+                        PopupContent::Add(_) => {
+                            on_item_add(value);
+                        }
+                        PopupContent::Edit { index, .. } => {
+                            on_item_edit((value, index));
+                        }
+                    }
+                    popup_open.set(false);
+                },
+                value: match popup_content() {
+                    PopupContent::None => None,
+                    PopupContent::Add(action) | PopupContent::Edit { action, .. } => Some(action),
+                },
             }
         }
     }
@@ -1443,7 +1403,7 @@ fn ActionConfigurationList(
 fn ActionConfigurationItem(action: ActionConfiguration) -> Element {
     const ITEM_TEXT_CLASS: &str =
         "text-center inline-block pt-1 text-ellipsis overflow-hidden whitespace-nowrap";
-    const ITEM_BORDER_CLASS: &str = "border-r-2 border-gray-700";
+    const ITEM_BORDER_CLASS: &str = "border-r-2 border-secondary-border";
 
     let ActionConfiguration {
         key,
@@ -1496,9 +1456,173 @@ fn ActionConfigurationItem(action: ActionConfiguration) -> Element {
     };
 
     rsx! {
-        div { class: "grid grid-cols-[100px_auto] h-6 paragraph-xs !text-gray-400 group-hover:bg-gray-900 {linked_action}",
+        div { class: "grid grid-cols-[100px_auto] h-6 text-xs text-secondary-text group-hover:bg-secondary-surface {linked_action}",
             div { class: "{ITEM_BORDER_CLASS} {ITEM_TEXT_CLASS}", "{link_key}{key} × {count}" }
             div { class: "pl-1 pr-13 {ITEM_TEXT_CLASS}", "{millis}{wait_secs}{with}" }
+        }
+    }
+}
+
+#[component]
+fn CharactersKeyBindingConfigurationInput(
+    label: String,
+    value: Option<KeyBindingConfiguration>,
+    on_value: Callback<Option<KeyBindingConfiguration>>,
+    #[props(default)] optional: bool,
+    #[props(default)] tooltip: Option<String>,
+    disabled: ReadOnlySignal<bool>,
+    #[props(default)] label_class: String,
+    #[props(default)] input_class: String,
+) -> Element {
+    rsx! {
+        CharactersKeyInput {
+            label,
+            value: value.map(|config| config.key),
+            on_value: move |new_value: Option<KeyBinding>| {
+                let new_value = new_value
+                    .map(|key| {
+                        let mut config = value.unwrap_or_default();
+                        config.key = key;
+                        config
+                    });
+                on_value(new_value);
+            },
+            optional,
+            tooltip,
+            disabled,
+            label_class,
+            input_class,
+        }
+    }
+}
+
+#[component]
+fn CharactersKeyInput(
+    label: String,
+    value: Option<KeyBinding>,
+    on_value: Callback<Option<KeyBinding>>,
+    #[props(default)] optional: bool,
+    #[props(default)] tooltip: Option<String>,
+    #[props(default = ContentSide::Bottom)] tooltip_side: ContentSide,
+    #[props(default = ContentAlign::Start)] tooltip_align: ContentAlign,
+    #[props(default)] disabled: ReadOnlySignal<bool>,
+    #[props(default)] label_class: String,
+    #[props(default)] input_class: String,
+) -> Element {
+    let label = if optional {
+        format!("{label} (optional)")
+    } else {
+        label.to_string()
+    };
+
+    rsx! {
+        Labeled {
+            label,
+            class: label_class,
+            tooltip,
+            tooltip_side,
+            tooltip_align,
+
+            KeyInput {
+                value,
+                on_value,
+                optional,
+                disabled,
+                class: input_class,
+            }
+        }
+    }
+}
+
+#[component]
+fn CharactersCheckbox(
+    label: &'static str,
+    checked: bool,
+    on_checked: Callback<bool>,
+    #[props(default)] tooltip: Option<String>,
+    #[props(default)] disabled: ReadOnlySignal<bool>,
+) -> Element {
+    rsx! {
+        Labeled { label, tooltip, tooltip_align: ContentAlign::Center,
+            Checkbox { checked, on_checked, disabled }
+        }
+    }
+}
+
+#[component]
+fn CharactersSelect<T: PartialEq + Clone + Display + IntoEnumIterator + 'static>(
+    label: &'static str,
+    on_selected: Callback<T>,
+    selected: ReadOnlySignal<T>,
+    #[props(default)] disabled: ReadOnlySignal<bool>,
+) -> Element {
+    let selected_equal =
+        use_callback(move |value: T| mem::discriminant(&selected()) == mem::discriminant(&value));
+
+    rsx! {
+        Labeled { label,
+            Select::<T> {
+                on_selected: move |selected| {
+                    on_selected(selected);
+                },
+                disabled,
+
+                for value in T::iter() {
+                    SelectOption::<T> {
+                        value: value.clone(),
+                        label: value.to_string(),
+                        selected: selected_equal(value),
+                        disabled,
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn CharactersPercentageInput(
+    label: &'static str,
+    on_value: Callback<u32>,
+    value: u32,
+    disabled: bool,
+) -> Element {
+    rsx! {
+        Labeled { label,
+            PercentageInput { value, on_value, disabled }
+        }
+    }
+}
+
+#[component]
+fn CharactersMillisInput(
+    label: &'static str,
+    value: u64,
+    on_value: Callback<u64>,
+    #[props(default)] disabled: bool,
+) -> Element {
+    rsx! {
+        Labeled { label,
+            MillisInput { value, on_value, disabled }
+        }
+    }
+}
+
+#[component]
+fn CharactersNumberU32Input(
+    label: &'static str,
+    value: u32,
+    on_value: Callback<u32>,
+    #[props(default)] disabled: bool,
+) -> Element {
+    rsx! {
+        Labeled { label,
+            PrimitiveIntegerInput {
+                value,
+                on_value,
+                min_value: 1,
+                disabled,
+            }
         }
     }
 }

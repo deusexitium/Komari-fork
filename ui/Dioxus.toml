@@ -1,11 +1,8 @@
 [application]
-asset_dir = "assets"
 
 [web.watcher]
-watch_path = ["src", "assets"]
+watch_path = ["src", "public"]
 
 [web.resource]
-style = ["public/tailwind.css"]
-script = ["assets/autoNumeric.min.js"]
 
 [web.resource.dev]

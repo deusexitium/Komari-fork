@@ -19,12 +19,15 @@ use tokio::{sync::broadcast::error::RecvError, time::sleep};
 
 use crate::{
     AppState,
-    button::{Button, ButtonKind},
-    select::TextSelect,
+    components::{
+        button::{Button, ButtonStyle},
+        named_select::NamedSelect,
+        select::{Select, SelectOption},
+    },
 };
 
 const BACKGROUND: Asset = asset!(
-    "assets/background.png",
+    "public/background.png",
     ImageAssetOptions::new().with_webp()
 );
 
@@ -306,13 +309,13 @@ enum MinimapUpdate {
 }
 
 #[component]
-pub fn Minimap() -> Element {
+pub fn MinimapScreen() -> Element {
     let mut minimap = use_context::<AppState>().minimap;
     let mut minimap_preset = use_context::<AppState>().minimap_preset;
     let mut minimaps = use_resource(async || query_minimaps().await.unwrap_or_default());
     let position = use_context::<AppState>().position;
     // Maps queried `minimaps` to names
-    let minimap_names = use_memo(move || {
+    let minimap_names = use_memo::<Vec<String>>(move || {
         minimaps()
             .unwrap_or_default()
             .into_iter()
@@ -408,7 +411,7 @@ pub fn Minimap() -> Element {
         div { class: "relative flex flex-col flex-none w-xs xl:w-md z-0",
             div {
                 class: "absolute inset-0 bg-no-repeat bg-center w-[130%] -z-1",
-                style: "background-image: url({BACKGROUND}); background-size: 150%; background-position: 85% 70px;",
+                style: "background-image: url({BACKGROUND}); background-size: 100%; background-position: -10px 120px;",
             }
             Canvas {
                 state,
@@ -422,30 +425,40 @@ pub fn Minimap() -> Element {
                 div { class: "flex flex-col items-end w-full",
                     ImportExport { minimap }
                     div { class: "h-10 w-full flex items-center",
-                        TextSelect {
+                        NamedSelect {
                             class: "w-full",
-                            options: minimap_names(),
-                            disabled: false,
-                            placeholder: "Create a map...",
                             on_create: move |name| {
                                 coroutine.send(MinimapUpdate::Create(name));
                             },
                             on_delete: move |_| {
                                 coroutine.send(MinimapUpdate::Delete);
                             },
-                            on_select: move |(index, _)| {
-                                let selected: MinimapData = minimaps
-                                    .peek()
-                                    .as_ref()
-                                    .expect("should already loaded")
-                                    .get(index)
-                                    .cloned()
-                                    .unwrap();
-                                minimap_preset.set(selected.actions.keys().next().cloned());
-                                minimap.set(Some(selected));
-                                coroutine.send(MinimapUpdate::Set);
-                            },
-                            selected: minimap_index(),
+                            delete_disabled: minimap_names().is_empty(),
+                            Select::<usize> {
+                                class: "w-full",
+                                placeholder: "Create a map...",
+                                disabled: minimap_names().is_empty(),
+                                on_selected: move |index| {
+                                    let selected: MinimapData = minimaps
+                                        .peek()
+                                        .as_ref()
+                                        .expect("should already loaded")
+                                        .get(index)
+                                        .cloned()
+                                        .unwrap();
+                                    minimap_preset.set(selected.actions.keys().next().cloned());
+                                    minimap.set(Some(selected));
+                                    coroutine.send(MinimapUpdate::Set);
+                                },
+
+                                for (i , name) in minimap_names().into_iter().enumerate() {
+                                    SelectOption::<usize> {
+                                        value: i,
+                                        label: name,
+                                        selected: minimap_index() == Some(i),
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -571,7 +584,7 @@ fn Canvas(
     });
 
     rsx! {
-        div { class: "relative h-31 xl:h-38 rounded-2xl bg-gray-900",
+        div { class: "relative h-31 xl:h-38 rounded-2xl bg-secondary-surface",
             canvas {
                 class: "absolute inset-0 rounded-2xl w-full h-full",
                 id: "canvas-minimap",
@@ -667,8 +680,8 @@ fn Info(
 #[component]
 fn InfoItem(name: String, value: String) -> Element {
     rsx! {
-        p { class: "paragraph font-mono", "{name}" }
-        p { class: "paragraph text-right font-mono", "{value}" }
+        p { class: "text-sm text-primary-text font-mono", "{name}" }
+        p { class: "text-sm text-primary-text text-right font-mono", "{value}" }
     }
 }
 
@@ -727,8 +740,7 @@ fn Buttons(
         div { class: "flex h-10 justify-center items-center gap-4",
             Button {
                 class: "w-20",
-                label: start_stop_text(),
-                kind: ButtonKind::Primary,
+                style: ButtonStyle::Primary,
                 disabled: disabled(),
                 on_click: move || async move {
                     let kind = match *kind.peek() {
@@ -737,11 +749,11 @@ fn Buttons(
                     };
                     rotate_actions(kind).await;
                 },
+                {start_stop_text()}
             }
             Button {
                 class: "w-20",
-                label: suspend_resume_text(),
-                kind: ButtonKind::Primary,
+                style: ButtonStyle::Primary,
                 disabled: suspend_resume_disabled(),
                 on_click: move || async move {
                     let kind = match *kind.peek() {
@@ -750,14 +762,15 @@ fn Buttons(
                     };
                     rotate_actions(kind).await;
                 },
+                {suspend_resume_text()}
             }
             Button {
                 class: "w-20",
-                label: "Re-detect",
-                kind: ButtonKind::Primary,
+                style: ButtonStyle::Primary,
                 on_click: move |_| async move {
                     redetect_minimap().await;
                 },
+                "Re-detect"
             }
         }
     }
@@ -836,23 +849,25 @@ fn ImportExport(minimap: ReadOnlySignal<Option<MinimapData>>) -> Element {
                 }
                 Button {
                     class: "w-20",
-                    label: "Import",
-                    kind: ButtonKind::Primary,
+                    style: ButtonStyle::Primary,
                     on_click: move |_| {
                         import(());
                     },
+
+                    "Import"
                 }
             }
             div {
                 a { id: export_element_id(), class: "w-0 h-0 invisible" }
                 Button {
                     class: "w-20",
-                    label: "Export",
-                    kind: ButtonKind::Primary,
+                    style: ButtonStyle::Primary,
                     disabled: minimap().is_none(),
                     on_click: move |_| {
                         export(());
                     },
+
+                    "Export"
                 }
             }
         }
