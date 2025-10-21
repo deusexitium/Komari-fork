@@ -1651,7 +1651,7 @@ mod tests {
         };
 
         rotator.build_actions(args);
-        assert_eq!(rotator.priority_actions.len(), 8);
+        assert_eq!(rotator.priority_actions.len(), 9);
         assert_eq!(rotator.normal_actions.len(), 2);
     }
 

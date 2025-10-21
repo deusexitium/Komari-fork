@@ -1,4 +1,3 @@
-#[cfg(debug_assertions)]
 use std::path::Path;
 use std::{
     env, fs,

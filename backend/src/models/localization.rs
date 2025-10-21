@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::impl_identifiable;
 
+// TODO: Support localization for HEXA Booster exchange
 #[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
 pub struct Localization {
     #[serde(skip_serializing, default)]
