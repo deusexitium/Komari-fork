@@ -1407,7 +1407,7 @@ fn exchange_hexa_booster_priority_action(
                 matches!(sol_erda, SolErda::Full)
             }
             ExchangeHexaBoosterCondition::AtLeastOne => {
-                matches!(sol_erda, SolErda::AtLeastOne)
+                matches!(sol_erda, SolErda::AtLeastOne | SolErda::Full)
             }
         };
 
@@ -1448,7 +1448,11 @@ fn unstuck_priority_action() -> PriorityAction {
         move |detector: Box<dyn Detector>| -> Result<bool> { Ok(detector.detect_esc_settings()) };
 
     PriorityAction {
-        condition: Condition(Box::new(move |resources, world, _| {
+        condition: Condition(Box::new(move |resources, world, info| {
+            if !at_least_millis_passed_since(info.last_queued_time, 3000) {
+                return ConditionResult::Skip;
+            }
+
             if !world.player.state.can_override_current_state(None) {
                 return ConditionResult::Skip;
             }
