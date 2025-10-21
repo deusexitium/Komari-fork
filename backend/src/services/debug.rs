@@ -1,4 +1,5 @@
 use std::{
+    path::PathBuf,
     sync::{Arc, LazyLock},
     time::Instant,
 };
@@ -16,11 +17,12 @@ use tokio::sync::broadcast::{self, Receiver, Sender};
 
 use crate::{
     DebugState,
-    debug::{save_image_for_training, save_image_for_training_to, save_minimap_for_training},
+    debug::save_minimap_for_training,
     detect::{ArrowsCalibrating, ArrowsState, DefaultDetector, Detector},
     ecs::Resources,
     mat::OwnedMat,
     models::Localization,
+    utils::{self, DatasetDir},
 };
 
 const SOLVE_RUNE_TIMEOUT_SECS: u64 = 10;
@@ -45,7 +47,11 @@ impl Default for DebugService {
 impl DebugService {
     pub fn poll(&mut self, resources: &Resources) {
         if let Some(id) = self.recording_id.clone() {
-            save_image_for_training_to(resources.detector().mat(), Some(id), false, false);
+            utils::save_image_to(
+                resources.detector().mat(),
+                DatasetDir::Root,
+                PathBuf::from(id),
+            );
         }
 
         if let Some((calibrating, instant)) = self.infering_rune.as_ref().copied() {
@@ -85,12 +91,6 @@ impl DebugService {
 
     pub fn set_auto_save_rune(&self, resources: &Resources, auto_save: bool) {
         resources.debug.set_auto_save_rune(auto_save);
-    }
-
-    pub fn capture_image(&self, resources: &Resources, is_grayscale: bool) {
-        if let Some(detector) = resources.detector.as_ref() {
-            save_image_for_training(detector.mat(), is_grayscale, false);
-        }
     }
 
     pub fn record_images(&mut self, start: bool) {

@@ -564,6 +564,12 @@ impl RequestHandler for DefaultRequestHandler<'_> {
         to_base64_from_mat(&mat).ok()
     }
 
+    fn on_save_capture_image(&self, is_grayscale: bool) {
+        self.service
+            .localization
+            .save_capture_image(self.resources, is_grayscale);
+    }
+
     #[cfg(debug_assertions)]
     fn on_debug_state_receiver(&self) -> Receiver<DebugState> {
         self.service.debug.subscribe_state()
@@ -574,13 +580,6 @@ impl RequestHandler for DefaultRequestHandler<'_> {
         self.service
             .debug
             .set_auto_save_rune(self.resources, auto_save);
-    }
-
-    #[cfg(debug_assertions)]
-    fn on_capture_image(&self, is_grayscale: bool) {
-        self.service
-            .debug
-            .capture_image(self.resources, is_grayscale);
     }
 
     #[cfg(debug_assertions)]

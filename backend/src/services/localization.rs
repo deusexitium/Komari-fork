@@ -9,6 +9,8 @@ use crate::{
         POPUP_NEXT_TEMPLATE, POPUP_OK_NEW_TEMPLATE, POPUP_OK_OLD_TEMPLATE, POPUP_YES_TEMPLATE,
         TIMER_TEMPLATE, to_base64_from_mat,
     },
+    ecs::Resources,
+    utils::{self, DatasetDir},
 };
 
 /// A service for handling localization-related incoming requests.
@@ -18,6 +20,9 @@ pub trait LocalizationService: Debug {
 
     /// Updates the currently in use [`Localization`] with new `localization`.
     fn update_localization(&mut self, localization: Localization);
+
+    /// Saves the currently captured image to the `datasets` folder.
+    fn save_capture_image(&self, resources: &Resources, is_grayscale: bool);
 }
 
 #[derive(Debug)]
@@ -56,5 +61,15 @@ impl LocalizationService for DefaultLocalizationService {
 
     fn update_localization(&mut self, localization: Localization) {
         *self.localization.borrow_mut() = Arc::new(localization);
+    }
+
+    fn save_capture_image(&self, resources: &Resources, is_grayscale: bool) {
+        if let Some(detector) = resources.detector.as_ref() {
+            if is_grayscale {
+                utils::save_image_to_default(detector.grayscale_mat(), DatasetDir::Root);
+            } else {
+                utils::save_image_to_default(detector.mat(), DatasetDir::Root);
+            }
+        }
     }
 }

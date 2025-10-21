@@ -12,7 +12,7 @@ use serde_json::Value;
 use strum::{Display, EnumIter, EnumString};
 use tokio::sync::broadcast::{Receiver, Sender, channel};
 
-use crate::pathing;
+use crate::{ExchangeHexaBoosterCondition, pathing};
 use crate::{bridge::KeyKind, models::Localization};
 
 const MAPS: &str = "maps";
@@ -377,6 +377,12 @@ pub struct Character {
     pub vip_booster_key: KeyBindingConfiguration,
     #[serde(default)]
     pub hexa_booster_key: KeyBindingConfiguration,
+    #[serde(default)]
+    pub hexa_booster_exchange_condition: ExchangeHexaBoosterCondition,
+    #[serde(default = "hexa_booster_exchange_amount_default")]
+    pub hexa_booster_exchange_amount: u32,
+    #[serde(default)]
+    pub hexa_booster_exchange_all: bool,
     pub class: Class,
     #[serde(default)]
     pub disable_double_jumping: bool,
@@ -396,6 +402,10 @@ pub struct Character {
 
 fn feed_pet_count_default() -> u32 {
     3
+}
+
+fn hexa_booster_exchange_amount_default() -> u32 {
+    1
 }
 
 fn jump_key_default() -> KeyBindingConfiguration {
@@ -456,6 +466,9 @@ impl Default for Character {
             extreme_gold_potion_key: KeyBindingConfiguration::default(),
             vip_booster_key: KeyBindingConfiguration::default(),
             hexa_booster_key: KeyBindingConfiguration::default(),
+            hexa_booster_exchange_condition: ExchangeHexaBoosterCondition::default(),
+            hexa_booster_exchange_amount: hexa_booster_exchange_amount_default(),
+            hexa_booster_exchange_all: false,
             class: Class::default(),
             disable_double_jumping: false,
             disable_adjusting: false,
@@ -955,6 +968,7 @@ pub enum KeyBinding {
     Shift,
     Ctrl,
     Alt,
+    Backspace,
 }
 
 impl From<KeyKind> for KeyBinding {
@@ -1030,6 +1044,7 @@ impl From<KeyKind> for KeyBinding {
             KeyKind::Shift => KeyBinding::Shift,
             KeyKind::Ctrl => KeyBinding::Ctrl,
             KeyKind::Alt => KeyBinding::Alt,
+            KeyKind::Backspace => KeyBinding::Backspace,
         }
     }
 }

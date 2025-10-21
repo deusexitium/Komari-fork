@@ -24,6 +24,7 @@ use crate::{
         grapple::{GRAPPLING_THRESHOLD, Grappling},
         next_action,
         solve_rune::SolvingRune,
+        unstuck::Unstucking,
         use_key::UseKey,
     },
     transition, transition_from_action, transition_if,
@@ -268,7 +269,10 @@ pub fn update_moving_state(
     player.state = Player::Idle; // Sets initial next state first
     transition_if!(
         player,
-        Player::Unstucking(Timeout::default(), context.track_unstucking_transitioned(),),
+        Player::Unstucking(Unstucking::new_movement(
+            Timeout::default(),
+            context.track_unstucking_transitioned()
+        )),
         context.track_unstucking()
     );
 
@@ -475,9 +479,11 @@ fn update_from_action(player: &mut PlayerEntity, moving: Moving) {
 
         Some(
             PlayerAction::Chat(_)
+            | PlayerAction::Unstuck
             | PlayerAction::Panic(_)
             | PlayerAction::FamiliarsSwap(_)
-            | PlayerAction::UseBooster(_),
+            | PlayerAction::UseBooster(_)
+            | PlayerAction::ExchangeBooster(_),
         ) => {
             panic!("unhandled action {action:?}")
         }

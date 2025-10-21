@@ -14,17 +14,18 @@ use opencv::core::{Point, Rect};
 use ordered_hash_map::OrderedHashMap;
 
 use crate::{
-    ActionKeyDirection, ActionKeyWith, Bound, FamiliarRarity, KeyBinding, MobbingKey, Position,
-    SwappableFamiliars,
+    ActionKeyDirection, ActionKeyWith, Bound, ExchangeHexaBoosterCondition, FamiliarRarity,
+    KeyBinding, MobbingKey, Position, SwappableFamiliars,
     array::Array,
     buff::{Buff, BuffKind},
     database::{Action, ActionCondition, ActionKey, ActionMove, EliteBossBehavior},
-    detect::{BoosterKind, BoosterState},
+    detect::{BoosterKind, Detector, QuickSlotsBooster, SolErda},
     ecs::{Resources, World},
     minimap::Minimap,
     player::{
-        AutoMob, Booster, FamiliarsSwap, GRAPPLING_THRESHOLD, Key, Panic, PanicTo, PingPong,
-        PingPongDirection, PlayerAction, PlayerContext, PlayerEntity, Quadrant, UseBooster,
+        AutoMob, Booster, ExchangeBooster, FamiliarsSwap, GRAPPLING_THRESHOLD, Key, Panic, PanicTo,
+        PingPong, PingPongDirection, PlayerAction, PlayerContext, PlayerEntity, Quadrant,
+        UseBooster,
     },
     run::MS_PER_TICK,
     skill::{Skill, SkillKind},
@@ -44,7 +45,7 @@ enum ConditionResult {
     Ignore,
 }
 
-type ConditionFn = Box<dyn Fn(&Resources, &World, &mut PriorityActionQueueInfo) -> ConditionResult>;
+type ConditionFn = Box<dyn FnMut(&Resources, &World, &PriorityActionQueueInfo) -> ConditionResult>;
 
 /// Predicate for when a priority action can be queued.
 struct Condition(ConditionFn);
@@ -151,6 +152,9 @@ pub struct RotatorBuildArgs<'a> {
     pub familiar_swap_check_millis: u64,
     pub elite_boss_behavior: EliteBossBehavior,
     pub elite_boss_behavior_key: KeyBinding,
+    pub hexa_booster_exchange_condition: ExchangeHexaBoosterCondition,
+    pub hexa_booster_exchange_amount: u32,
+    pub hexa_booster_exchange_all: bool,
     pub enable_panic_mode: bool,
     pub enable_rune_solving: bool,
     pub enable_familiars_swapping: bool,
@@ -354,7 +358,7 @@ impl DefaultRotator {
                 continue;
             }
 
-            let condition_fn = &action.condition.0;
+            let condition_fn = &mut action.condition.0;
             let result = condition_fn(resources, world, &mut action.queue_info);
             match result {
                 ConditionResult::Queue => {
@@ -805,6 +809,9 @@ impl Rotator for DefaultRotator {
             familiar_swap_check_millis,
             elite_boss_behavior,
             elite_boss_behavior_key,
+            hexa_booster_exchange_condition,
+            hexa_booster_exchange_amount,
+            hexa_booster_exchange_all,
             enable_panic_mode,
             enable_rune_solving,
             enable_familiars_swapping,
@@ -901,21 +908,40 @@ impl Rotator for DefaultRotator {
         if enable_using_vip_booster {
             self.priority_actions.insert(
                 self.id_counter.fetch_add(1, Ordering::Relaxed),
-                use_booster_priority_action(BoosterKind::Vip),
+                use_booster_priority_action(Booster::Vip),
             );
         }
         if enable_using_hexa_booster {
             self.priority_actions.insert(
                 self.id_counter.fetch_add(1, Ordering::Relaxed),
-                use_booster_priority_action(BoosterKind::Hexa),
+                use_booster_priority_action(Booster::Hexa),
             );
         }
+        if !matches!(
+            hexa_booster_exchange_condition,
+            ExchangeHexaBoosterCondition::None
+        ) {
+            self.priority_actions.insert(
+                self.id_counter.fetch_add(1, Ordering::Relaxed),
+                exchange_hexa_booster_priority_action(
+                    hexa_booster_exchange_condition,
+                    hexa_booster_exchange_amount,
+                    hexa_booster_exchange_all,
+                ),
+            );
+        }
+
         for (i, key) in buffs.iter().copied() {
             self.priority_actions.insert(
                 self.id_counter.fetch_add(1, Ordering::Relaxed),
                 buff_priority_action(i, key),
             );
         }
+
+        self.priority_actions.insert(
+            self.id_counter.fetch_add(1, Ordering::Relaxed),
+            unstuck_priority_action(),
+        );
     }
 
     #[inline]
@@ -1066,18 +1092,25 @@ fn priority_action(
 /// and temporarily ignored in subsequent queue do to `last_queued_time` being updated.
 #[inline]
 fn familiar_essence_replenish_priority_action(key: KeyBinding) -> PriorityAction {
+    let mut task: Option<Task<Result<bool>>> = None;
+    let task_fn = move |detector: Box<dyn Detector>| -> Result<bool> {
+        Ok(detector.detect_familiar_essence_depleted())
+    };
+
     PriorityAction {
-        condition: Condition(Box::new(|resources, world, info| {
+        condition: Condition(Box::new(move |resources, world, info| {
             if !at_least_millis_passed_since(info.last_queued_time, COOLDOWN_BETWEEN_QUEUE_MILLIS) {
                 return ConditionResult::Skip;
             }
+
             if !matches!(world.buffs[BuffKind::Familiar].state, Buff::Yes) {
                 return ConditionResult::Skip;
             }
-            if resources.detector().detect_familiar_essence_depleted() {
-                ConditionResult::Queue
-            } else {
-                ConditionResult::Ignore
+
+            match update_detection_task(resources, 10000, &mut task, task_fn) {
+                Update::Ok(true) => ConditionResult::Queue,
+                Update::Err(_) | Update::Ok(false) => ConditionResult::Ignore,
+                Update::Pending => ConditionResult::Skip,
             }
         })),
         condition_kind: None,
@@ -1114,15 +1147,18 @@ fn solve_rune_priority_action() -> PriorityAction {
             if world.player.context.is_validating_rune() {
                 return ConditionResult::Skip;
             }
+
             if !at_least_millis_passed_since(info.last_queued_time, COOLDOWN_BETWEEN_QUEUE_MILLIS) {
                 return ConditionResult::Skip;
             }
+
             if let Minimap::Idle(idle) = world.minimap.state
                 && idle.rune().is_some()
                 && matches!(world.buffs[BuffKind::Rune].state, Buff::No)
             {
                 return ConditionResult::Queue;
             }
+
             ConditionResult::Skip
         })),
         condition_kind: None,
@@ -1222,6 +1258,7 @@ fn panic_priority_action() -> PriorityAction {
                 if !idle.has_any_other_player() || info.last_queued_time.is_none() {
                     return ConditionResult::Ignore;
                 }
+
                 if at_least_millis_passed_since(info.last_queued_time, 15000) {
                     ConditionResult::Queue
                 } else {
@@ -1246,6 +1283,7 @@ fn elite_boss_change_channel_priority_action() -> PriorityAction {
             if !at_least_millis_passed_since(info.last_queued_time, 15000) {
                 return ConditionResult::Skip;
             }
+
             if let Minimap::Idle(idle) = world.minimap.state
                 && idle.has_elite_boss()
             {
@@ -1271,6 +1309,7 @@ fn elite_boss_use_key_priority_action(key: KeyBinding) -> PriorityAction {
             if !at_least_millis_passed_since(info.last_queued_time, 15000) {
                 return ConditionResult::Skip;
             }
+
             if let Minimap::Idle(idle) = world.minimap.state
                 && idle.has_elite_boss()
             {
@@ -1299,42 +1338,133 @@ fn elite_boss_use_key_priority_action(key: KeyBinding) -> PriorityAction {
 }
 
 #[inline]
-fn use_booster_priority_action(kind: BoosterKind) -> PriorityAction {
+fn use_booster_priority_action(kind: Booster) -> PriorityAction {
+    let detect_kind = match kind {
+        Booster::Vip => BoosterKind::Vip,
+        Booster::Hexa => BoosterKind::Hexa,
+    };
+
+    let mut task: Option<Task<Result<bool>>> = None;
+    let task_fn = move |detector: Box<dyn Detector>| -> Result<bool> {
+        if detector.detect_timer_visible() {
+            return Ok(false);
+        }
+
+        let booster = detector.detect_quick_slots_booster(detect_kind)?;
+        let queue = matches!(booster, QuickSlotsBooster::Available);
+
+        Ok(queue)
+    };
+
     PriorityAction {
         condition: Condition(Box::new(move |resources, world, info| {
             if !at_least_millis_passed_since(info.last_queued_time, COOLDOWN_BETWEEN_QUEUE_MILLIS) {
                 return ConditionResult::Skip;
             }
-            if matches!(kind, BoosterKind::Vip)
-                && world
-                    .player
-                    .context
-                    .is_vip_booster_fail_count_limit_reached()
+            if world
+                .player
+                .context
+                .is_booster_fail_count_limit_reached(kind)
             {
                 return ConditionResult::Ignore;
             }
 
-            if let Some(detector) = resources.detector.as_ref()
-                && !detector.detect_timer_visible()
-            {
-                match detector.detect_booster(kind) {
-                    BoosterState::Available => {
-                        return ConditionResult::Queue;
-                    }
-                    BoosterState::Unavailable | BoosterState::NotInQuickSlots => (),
-                }
+            if resources.detector.is_none() {
+                return ConditionResult::Ignore;
             }
 
-            ConditionResult::Ignore
+            match update_detection_task(resources, 10000, &mut task, task_fn) {
+                Update::Ok(true) => ConditionResult::Queue,
+                Update::Err(_) | Update::Ok(false) => ConditionResult::Ignore,
+                Update::Pending => ConditionResult::Skip,
+            }
         })),
         condition_kind: None,
-        inner: RotatorAction::Single(PlayerAction::UseBooster(UseBooster {
-            kind: match kind {
-                BoosterKind::Vip => Booster::Vip,
-                BoosterKind::Hexa => Booster::Hexa,
-            },
-        })),
+        inner: RotatorAction::Single(PlayerAction::UseBooster(UseBooster { kind })),
         metadata: Some(ActionMetadata::UseBooster),
+        queue_to_front: true,
+        queue_info: PriorityActionQueueInfo::default(),
+    }
+}
+
+#[inline]
+fn exchange_hexa_booster_priority_action(
+    condition: ExchangeHexaBoosterCondition,
+    amount: u32,
+    all: bool,
+) -> PriorityAction {
+    let mut task: Option<Task<Result<bool>>> = None;
+    let task_fn = move |detector: Box<dyn Detector>| -> Result<bool> {
+        let booster = detector.detect_quick_slots_booster(BoosterKind::Hexa)?;
+        if !matches!(booster, QuickSlotsBooster::Unavailable) {
+            return Ok(false);
+        }
+
+        let sol_erda = detector.detect_hexa_sol_erda()?;
+        let queue = match condition {
+            ExchangeHexaBoosterCondition::None => unreachable!(),
+            ExchangeHexaBoosterCondition::Full => {
+                matches!(sol_erda, SolErda::Full)
+            }
+            ExchangeHexaBoosterCondition::AtLeastOne => {
+                matches!(sol_erda, SolErda::AtLeastOne)
+            }
+        };
+
+        Ok(queue)
+    };
+
+    PriorityAction {
+        condition: Condition(Box::new(move |resources, _, info| {
+            if !at_least_millis_passed_since(info.last_queued_time, COOLDOWN_BETWEEN_QUEUE_MILLIS) {
+                return ConditionResult::Skip;
+            }
+
+            if resources.detector.is_none() {
+                return ConditionResult::Skip;
+            }
+
+            match update_detection_task(resources, 10000, &mut task, task_fn) {
+                Update::Ok(true) => ConditionResult::Queue,
+                Update::Err(_) | Update::Ok(false) => ConditionResult::Ignore,
+                Update::Pending => ConditionResult::Skip,
+            }
+        })),
+        condition_kind: None,
+        inner: RotatorAction::Single(PlayerAction::ExchangeBooster(ExchangeBooster {
+            amount,
+            all,
+        })),
+        metadata: None,
+        queue_to_front: true,
+        queue_info: PriorityActionQueueInfo::default(),
+    }
+}
+
+#[inline]
+fn unstuck_priority_action() -> PriorityAction {
+    let mut task: Option<Task<Result<bool>>> = None;
+    let task_fn =
+        move |detector: Box<dyn Detector>| -> Result<bool> { Ok(detector.detect_esc_settings()) };
+
+    PriorityAction {
+        condition: Condition(Box::new(move |resources, world, _| {
+            if !world.player.state.can_override_current_state(None) {
+                return ConditionResult::Skip;
+            }
+
+            if resources.detector.is_none() {
+                return ConditionResult::Skip;
+            }
+
+            match update_detection_task(resources, 3000, &mut task, task_fn) {
+                Update::Ok(true) => ConditionResult::Queue,
+                Update::Ok(false) | Update::Err(_) | Update::Pending => ConditionResult::Skip,
+            }
+        })),
+        condition_kind: None,
+        inner: RotatorAction::Single(PlayerAction::Unstuck),
+        metadata: None,
         queue_to_front: true,
         queue_info: PriorityActionQueueInfo::default(),
     }
@@ -1509,6 +1639,9 @@ mod tests {
             familiar_swap_check_millis: 0,
             elite_boss_behavior: EliteBossBehavior::CycleChannel,
             elite_boss_behavior_key: KeyBinding::default(),
+            hexa_booster_exchange_condition: ExchangeHexaBoosterCondition::None,
+            hexa_booster_exchange_amount: 1,
+            hexa_booster_exchange_all: false,
             enable_panic_mode: true,
             enable_rune_solving: true,
             enable_familiars_swapping: false,

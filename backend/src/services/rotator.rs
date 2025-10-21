@@ -87,6 +87,15 @@ impl RotatorService for DefaultRotatorService {
         let elite_boss_behavior_key = character
             .map(|character| character.elite_boss_behavior_key)
             .unwrap_or_default();
+        let hexa_booster_exchange_condition = character
+            .map(|character| character.hexa_booster_exchange_condition)
+            .unwrap_or_default();
+        let hexa_booster_exchange_amount = character
+            .map(|character| character.hexa_booster_exchange_amount)
+            .unwrap_or(1);
+        let hexa_booster_exchange_all = character
+            .map(|character| character.hexa_booster_exchange_all)
+            .unwrap_or_default();
         let enable_using_vip_booster = character
             .map(|character| character.vip_booster_key.enabled)
             .unwrap_or_default();
@@ -103,6 +112,9 @@ impl RotatorService for DefaultRotatorService {
             familiar_swap_check_millis: settings.familiars.swap_check_millis,
             elite_boss_behavior,
             elite_boss_behavior_key,
+            hexa_booster_exchange_condition,
+            hexa_booster_exchange_amount,
+            hexa_booster_exchange_all,
             enable_panic_mode: settings.enable_panic_mode,
             enable_rune_solving: settings.enable_rune_solving,
             enable_familiars_swapping: settings.familiars.enable_familiars_swapping,

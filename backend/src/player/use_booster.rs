@@ -66,9 +66,9 @@ pub fn update_using_booster_state(resources: &Resources, player: &mut PlayerEnti
     let is_terminal = matches!(player_next_state, Player::Idle);
     if is_terminal {
         if matches!(using.state, State::Completing { failed: true, .. }) {
-            player.context.track_vip_booster_fail_count();
+            player.context.track_booster_fail_count(using.kind);
         } else {
-            player.context.clear_vip_booster_fail_count();
+            player.context.clear_booster_fail_count(using.kind);
         }
     }
 
@@ -82,13 +82,13 @@ pub fn update_using_booster_state(resources: &Resources, player: &mut PlayerEnti
 }
 
 fn update_using(resources: &Resources, using: &mut UsingBooster, key: KeyKind) {
-    const PRESS_KEY_AT: u32 = 60;
+    const PRESS_KEY_AT: u32 = 30;
 
     let State::Using(timeout) = using.state else {
         panic!("using booster state is not using")
     };
 
-    match next_timeout_lifecycle(timeout, 120) {
+    match next_timeout_lifecycle(timeout, 60) {
         Lifecycle::Started(timeout) => transition!(using, State::Using(timeout)),
         Lifecycle::Ended => transition_if!(
             using,
@@ -148,7 +148,7 @@ fn update_completing(resources: &Resources, using: &mut UsingBooster) {
         panic!("using booster state is not completing")
     };
 
-    match next_timeout_lifecycle(timeout, 15) {
+    match next_timeout_lifecycle(timeout, 20) {
         Lifecycle::Started(timeout) | Lifecycle::Updated(timeout) => {
             transition!(
                 using,

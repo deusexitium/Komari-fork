@@ -47,6 +47,7 @@ mod run;
 mod services;
 mod skill;
 mod task;
+mod utils;
 
 pub use {
     database::{
@@ -118,12 +119,11 @@ enum Request {
     SelectCaptureHandle(Option<usize>),
     QueryTemplate(GameTemplate),
     ConvertImageToBase64(Vec<u8>, bool),
+    SaveCaptureImage(bool),
     #[cfg(debug_assertions)]
     DebugStateReceiver,
     #[cfg(debug_assertions)]
     AutoSaveRune(bool),
-    #[cfg(debug_assertions)]
-    CaptureImage(bool),
     #[cfg(debug_assertions)]
     InferRune,
     #[cfg(debug_assertions)]
@@ -155,12 +155,11 @@ enum Response {
     SelectCaptureHandle,
     QueryTemplate(String),
     ConvertImageToBase64(Option<String>),
+    SaveCaptureImage,
     #[cfg(debug_assertions)]
     DebugStateReceiver(broadcast::Receiver<DebugState>),
     #[cfg(debug_assertions)]
     AutoSaveRune,
-    #[cfg(debug_assertions)]
-    CaptureImage,
     #[cfg(debug_assertions)]
     InferRune,
     #[cfg(debug_assertions)]
@@ -203,14 +202,13 @@ pub(crate) trait RequestHandler {
 
     fn on_convert_image_to_base64(&self, image: Vec<u8>, is_grayscale: bool) -> Option<String>;
 
+    fn on_save_capture_image(&self, is_grayscale: bool);
+
     #[cfg(debug_assertions)]
     fn on_debug_state_receiver(&self) -> broadcast::Receiver<DebugState>;
 
     #[cfg(debug_assertions)]
     fn on_auto_save_rune(&self, auto_save: bool);
-
-    #[cfg(debug_assertions)]
-    fn on_capture_image(&self, is_grayscale: bool);
 
     #[cfg(debug_assertions)]
     fn on_infer_rune(&mut self);
@@ -495,6 +493,10 @@ pub async fn convert_image_to_base64(image: Vec<u8>, is_grayscale: bool) -> Opti
     send_request!(ConvertImageToBase64(image, is_grayscale) => (base64))
 }
 
+pub async fn save_capture_image(is_grayscale: bool) {
+    send_request!(SaveCaptureImage(is_grayscale))
+}
+
 #[cfg(debug_assertions)]
 pub async fn debug_state_receiver() -> broadcast::Receiver<DebugState> {
     send_request!(DebugStateReceiver => (receiver))
@@ -503,11 +505,6 @@ pub async fn debug_state_receiver() -> broadcast::Receiver<DebugState> {
 #[cfg(debug_assertions)]
 pub async fn auto_save_rune(auto_save: bool) {
     send_request!(AutoSaveRune(auto_save))
-}
-
-#[cfg(debug_assertions)]
-pub async fn capture_image(is_grayscale: bool) {
-    send_request!(CaptureImage(is_grayscale))
 }
 
 #[cfg(debug_assertions)]
@@ -584,6 +581,10 @@ pub(crate) fn poll_request(handler: &mut dyn RequestHandler) {
             Request::ConvertImageToBase64(image, is_grayscale) => Response::ConvertImageToBase64(
                 handler.on_convert_image_to_base64(image, is_grayscale),
             ),
+            Request::SaveCaptureImage(is_grayscale) => {
+                handler.on_save_capture_image(is_grayscale);
+                Response::SaveCaptureImage
+            }
             #[cfg(debug_assertions)]
             Request::DebugStateReceiver => {
                 Response::DebugStateReceiver(handler.on_debug_state_receiver())
@@ -592,11 +593,6 @@ pub(crate) fn poll_request(handler: &mut dyn RequestHandler) {
             Request::AutoSaveRune(auto_save) => {
                 handler.on_auto_save_rune(auto_save);
                 Response::AutoSaveRune
-            }
-            #[cfg(debug_assertions)]
-            Request::CaptureImage(is_grayscale) => {
-                handler.on_capture_image(is_grayscale);
-                Response::CaptureImage
             }
             #[cfg(debug_assertions)]
             Request::InferRune => {

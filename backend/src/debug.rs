@@ -1,52 +1,21 @@
-use std::env;
-use std::sync::LazyLock;
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{fs, path::PathBuf};
-
-use opencv::core::ModifyInplace;
 use opencv::core::Point;
 use opencv::core::Rect;
 use opencv::core::Scalar;
 use opencv::core::Size;
-use opencv::core::add_weighted_def;
 use opencv::core::{Mat, ToInputArray};
 use opencv::core::{MatTraitConst, Vector};
 use opencv::highgui::destroy_all_windows;
+use opencv::highgui::{imshow, wait_key};
+use opencv::imgproc::draw_contours_def;
 use opencv::imgproc::line_def;
+use opencv::imgproc::polylines;
 use opencv::imgproc::rectangle;
-use opencv::imgproc::{COLOR_BGRA2GRAY, draw_contours_def};
 use opencv::imgproc::{FONT_HERSHEY_SIMPLEX, put_text_def};
 use opencv::imgproc::{LINE_8, circle_def};
-use opencv::imgproc::{cvt_color_def, polylines};
-use opencv::{
-    highgui::{imshow, wait_key},
-    imgcodecs::imwrite_def,
-};
 use rand::distr::{Alphanumeric, SampleString};
 
 use crate::bridge::KeyKind;
-
-static DATASET_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let dir = env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("dataset");
-    fs::create_dir_all(dir.clone()).unwrap();
-    dir
-});
-
-static DATASET_MINIMAP_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let dir = DATASET_DIR.join("minimap");
-    fs::create_dir_all(dir.clone()).unwrap();
-    dir
-});
-
-static DATASET_RUNE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-    let dir = DATASET_DIR.join("rune");
-    fs::create_dir_all(dir.clone()).unwrap();
-    dir
-});
+use crate::utils::{self, DatasetDir};
 
 #[allow(unused)]
 pub fn debug_spinning_arrows(
@@ -192,45 +161,6 @@ pub fn debug_mat(
 }
 
 #[allow(unused)]
-pub fn save_image_for_training(mat: &impl MatTraitConst, is_grayscale: bool, view: bool) {
-    save_image_for_training_to(mat, None, is_grayscale, view);
-}
-
-#[allow(unused)]
-pub fn save_image_for_training_to(
-    mat: &impl MatTraitConst,
-    folder: Option<String>,
-    is_grayscale: bool,
-    view: bool,
-) {
-    let name = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let mat = if is_grayscale {
-        to_grayscale(mat)
-    } else {
-        mat.try_clone().unwrap() // No point in cloning except for having the same type
-    };
-    let folder = if let Some(id) = folder {
-        let dir = DATASET_DIR.join(id.as_str());
-        if !dir.exists() {
-            fs::create_dir_all(dir.clone()).unwrap();
-        }
-        dir
-    } else {
-        DATASET_DIR.clone()
-    };
-    let image = folder.join(format!("{name}.png"));
-
-    if view {
-        debug_mat("Image", &mat, 0, &[]);
-    }
-
-    imwrite_def(image.to_str().unwrap(), &mat).unwrap();
-}
-
-#[allow(unused)]
 pub fn debug_rune(mat: &Mat, preds: &Vec<&[f32]>, w_ratio: f32, h_ratio: f32) {
     let size = mat.size().unwrap();
     let bboxes = preds
@@ -274,20 +204,13 @@ pub fn save_rune_for_training<T: MatTraitConst + ToInputArray>(
         })
         .join("\n");
 
-    let dataset = &DATASET_RUNE_DIR;
-    let label = dataset.join(format!("{name}.txt"));
-    let image = dataset.join(format!("{name}.png"));
-
-    imwrite_def(image.to_str().unwrap(), mat).unwrap();
-    fs::write(label, labels).unwrap();
+    utils::save_image_to(mat, DatasetDir::Rune, format!("{name}.png"));
+    utils::save_file_to(labels, DatasetDir::Rune, format!("{name}.txt"));
 }
 
 #[allow(unused)]
 pub fn save_mobs_for_training(mat: &Mat, mobs: &[Rect]) {
     let name = Alphanumeric.sample_string(&mut rand::rng(), 8);
-    let dataset = LazyLock::force(&DATASET_DIR);
-    let label = dataset.join(format!("{name}.txt"));
-    let image = dataset.join(format!("{name}.png"));
     let mut labels = Vec::<String>::new();
     for mob in mobs.iter().copied() {
         labels.push(to_yolo_format(0, mat.size().unwrap(), mob));
@@ -304,22 +227,22 @@ pub fn save_mobs_for_training(mat: &Mat, mobs: &[Rect]) {
             .collect::<Vec<_>>(),
     );
     if key == 97 {
-        imwrite_def(image.to_str().unwrap(), mat).unwrap();
-        fs::write(label, labels.join("\n")).unwrap();
+        utils::save_image_to(mat, DatasetDir::Root, format!("{name}.png"));
+        utils::save_file_to(labels.join("\n"), DatasetDir::Root, format!("{name}.txt"));
     }
 }
 
-#[allow(unused)]
 pub fn save_minimap_for_training<T: MatTraitConst + ToInputArray>(mat: &T, minimap: Rect) {
     let name = Alphanumeric.sample_string(&mut rand::rng(), 8);
-    let dataset = &DATASET_MINIMAP_DIR;
-    let label = dataset.join(format!("{name}.txt"));
-    let image = dataset.join(format!("{name}.png"));
 
     let key = debug_mat("Training", mat, 0, &[(minimap, "Minimap")]);
     if key == 97 {
-        imwrite_def(image.to_str().unwrap(), mat).unwrap();
-        fs::write(label, to_yolo_format(0, mat.size().unwrap(), minimap)).unwrap();
+        utils::save_image_to(mat, DatasetDir::Minimap, format!("{name}.png"));
+        utils::save_file_to(
+            to_yolo_format(0, mat.size().unwrap(), minimap),
+            DatasetDir::Minimap,
+            format!("{name}.txt"),
+        );
     }
 }
 
@@ -339,16 +262,4 @@ fn to_yolo_format(label: u32, size: Size, bbox: Rect) -> String {
     let width = bbox.width as f32 / size.width as f32;
     let height = bbox.height as f32 / size.height as f32;
     format!("{label} {x_center} {y_center} {width} {height}")
-}
-
-fn to_grayscale(mat: &impl MatTraitConst) -> Mat {
-    let mut mat = mat.try_clone().unwrap();
-    unsafe {
-        // SAFETY: all of the functions below can be called in place.
-        mat.modify_inplace(|mat, mat_mut| {
-            cvt_color_def(mat, mat_mut, COLOR_BGRA2GRAY).unwrap();
-            add_weighted_def(mat, 1.5, mat, 0.0, -80.0, mat_mut).unwrap();
-        });
-    }
-    mat
 }

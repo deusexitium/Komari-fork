@@ -2,8 +2,9 @@ use std::{fmt::Display, fs::File, io::BufReader, mem};
 
 use backend::{
     ActionConfiguration, ActionConfigurationCondition, ActionKeyWith, Character, Class,
-    EliteBossBehavior, IntoEnumIterator, KeyBinding, KeyBindingConfiguration, LinkKeyBinding,
-    PotionMode, delete_character, query_characters, update_character, upsert_character,
+    EliteBossBehavior, ExchangeHexaBoosterCondition, IntoEnumIterator, KeyBinding,
+    KeyBindingConfiguration, LinkKeyBinding, PotionMode, delete_character, query_characters,
+    update_character, upsert_character,
 };
 use dioxus::prelude::*;
 use futures_util::StreamExt;
@@ -487,6 +488,7 @@ fn SectionUseBooster() -> Element {
                 }
                 CharactersCheckbox {
                     label: "Enabled",
+                    tooltip: "Requires VIP Booster to be visible in quick slots.",
                     checked: character().vip_booster_key.enabled,
                     on_checked: move |enabled| {
                         let character = character.peek().clone();
@@ -514,6 +516,7 @@ fn SectionUseBooster() -> Element {
                 }
                 CharactersCheckbox {
                     label: "Enabled",
+                    tooltip: "Requires HEXA Booster to be visible in quick slots.",
                     checked: character().hexa_booster_key.enabled,
                     on_checked: move |enabled| {
                         let character = character.peek().clone();
@@ -523,6 +526,41 @@ fn SectionUseBooster() -> Element {
                                 ..character.hexa_booster_key
                             },
                             ..character
+                        });
+                    },
+                    disabled: character().id.is_none(),
+                }
+                CharactersSelect::<ExchangeHexaBoosterCondition> {
+                    label: "Exchange when Sol Erda",
+                    tooltip: "Requires HEXA Booster to be visible in quick slots, Sol Erda tracker menu opened and HEXA Matrix configured in the quick menu. Exchange will only happen if there is no HEXA Booster.",
+                    selected: character().hexa_booster_exchange_condition,
+                    on_selected: move |hexa_booster_exchange_condition| {
+                        save_character(Character {
+                            hexa_booster_exchange_condition,
+                            ..character.peek().clone()
+                        });
+                    },
+                    disabled: character().id.is_none(),
+                }
+                CharactersNumberU32Input {
+                    label: "Amount",
+                    max_value: 20,
+                    value: character().hexa_booster_exchange_amount,
+                    on_value: move |hexa_booster_exchange_amount| {
+                        save_character(Character {
+                            hexa_booster_exchange_amount,
+                            ..character.peek().clone()
+                        });
+                    },
+                    disabled: character().id.is_none() || character().hexa_booster_exchange_all,
+                }
+                CharactersCheckbox {
+                    label: "Exchange all",
+                    checked: character().hexa_booster_exchange_all,
+                    on_checked: move |hexa_booster_exchange_all| {
+                        save_character(Character {
+                            hexa_booster_exchange_all,
+                            ..character.peek().clone()
                         });
                     },
                     disabled: character().id.is_none(),
@@ -1579,6 +1617,8 @@ fn CharactersCheckbox(
 #[component]
 fn CharactersSelect<T: PartialEq + Clone + Display + IntoEnumIterator + 'static>(
     label: &'static str,
+    #[props(default)] label_class: String,
+    #[props(default)] tooltip: Option<String>,
     on_selected: Callback<T>,
     selected: ReadOnlySignal<T>,
     #[props(default)] disabled: ReadOnlySignal<bool>,
@@ -1587,7 +1627,7 @@ fn CharactersSelect<T: PartialEq + Clone + Display + IntoEnumIterator + 'static>
         use_callback(move |value: T| mem::discriminant(&selected()) == mem::discriminant(&value));
 
     rsx! {
-        Labeled { label,
+        Labeled { label, class: label_class, tooltip,
             Select::<T> {
                 on_selected: move |selected| {
                     on_selected(selected);
@@ -1640,6 +1680,7 @@ fn CharactersNumberU32Input(
     label: &'static str,
     value: u32,
     on_value: Callback<u32>,
+    #[props(default)] max_value: Option<u32>,
     #[props(default)] disabled: bool,
 ) -> Element {
     rsx! {
@@ -1648,6 +1689,7 @@ fn CharactersNumberU32Input(
                 value,
                 on_value,
                 min_value: 1,
+                max_value,
                 disabled,
             }
         }

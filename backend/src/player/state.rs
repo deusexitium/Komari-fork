@@ -18,7 +18,7 @@ use crate::{
     ecs::Resources,
     minimap::Minimap,
     notification::NotificationKind,
-    player::{AUTO_MOB_USE_KEY_X_THRESHOLD, AUTO_MOB_USE_KEY_Y_THRESHOLD, AutoMob},
+    player::{AUTO_MOB_USE_KEY_X_THRESHOLD, AUTO_MOB_USE_KEY_Y_THRESHOLD, AutoMob, Booster},
     task::{Task, Update, update_detection_task},
 };
 
@@ -30,7 +30,7 @@ const MAX_RUNE_FAILED_COUNT: u32 = 8;
 
 /// The maximum number of times using VIP Booster can fail before it is determined that it is not
 /// usable anymore (e.g. 10 times limit reached).
-const MAX_VIP_BOOSTER_FAILED_COUNT: u32 = 5;
+const MAX_BOOSTER_FAILED_COUNT: u32 = 5;
 
 /// The maximum number of times horizontal movement can be repeated in non-auto-mobbing action.
 const HORIZONTAL_MOVEMENT_REPEAT_COUNT: u32 = 20;
@@ -331,6 +331,8 @@ pub struct PlayerContext {
 
     /// The number of times [`Player::UsingBooster`] for VIP Booster failed.
     vip_booster_failed_count: u32,
+    /// The number of times [`Player::UsingBooster`] for HEXA Booster failed.
+    hexa_booster_failed_count: u32,
 }
 
 impl PlayerContext {
@@ -525,24 +527,43 @@ impl PlayerContext {
         }
     }
 
-    /// Whether fail count for using VIP Booster has reached limit.
+    /// Whether fail count for using HEXA/VIP Booster has reached limit.
     #[inline]
-    pub fn is_vip_booster_fail_count_limit_reached(&self) -> bool {
-        self.vip_booster_failed_count >= MAX_VIP_BOOSTER_FAILED_COUNT
-    }
-
-    /// Increments the VIP Booster usage fail count.
-    #[inline]
-    pub(super) fn track_vip_booster_fail_count(&mut self) {
-        if self.vip_booster_failed_count < MAX_VIP_BOOSTER_FAILED_COUNT {
-            self.vip_booster_failed_count += 1;
+    pub fn is_booster_fail_count_limit_reached(&self, kind: Booster) -> bool {
+        match kind {
+            Booster::Vip => self.vip_booster_failed_count >= MAX_BOOSTER_FAILED_COUNT,
+            Booster::Hexa => self.hexa_booster_failed_count >= MAX_BOOSTER_FAILED_COUNT,
         }
     }
 
-    /// Resets VIP Booster usage fail count.
+    /// Increments the HEXA/VIP Booster usage fail count.
     #[inline]
-    pub(super) fn clear_vip_booster_fail_count(&mut self) {
-        self.vip_booster_failed_count = 0;
+    pub(super) fn track_booster_fail_count(&mut self, kind: Booster) {
+        match kind {
+            Booster::Vip => {
+                if self.vip_booster_failed_count < MAX_BOOSTER_FAILED_COUNT {
+                    self.vip_booster_failed_count += 1;
+                }
+            }
+            Booster::Hexa => {
+                if self.hexa_booster_failed_count < MAX_BOOSTER_FAILED_COUNT {
+                    self.hexa_booster_failed_count += 1;
+                }
+            }
+        }
+    }
+
+    /// Resets HEXA/VIP Booster usage fail count.
+    #[inline]
+    pub(super) fn clear_booster_fail_count(&mut self, kind: Booster) {
+        match kind {
+            Booster::Vip => {
+                self.vip_booster_failed_count = 0;
+            }
+            Booster::Hexa => {
+                self.hexa_booster_failed_count = 0;
+            }
+        }
     }
 
     /// Increments the rune validation fail count and sets [`PlayerState::rune_cash_shop`]

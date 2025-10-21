@@ -15,7 +15,10 @@ use crate::{
     bridge::KeyKind,
     ecs::Resources,
     minimap::Minimap,
-    player::{ChattingContent, PlayerEntity, chat::Chatting, use_booster::UsingBooster},
+    player::{
+        ChattingContent, PlayerEntity, chat::Chatting, exchange_booster::ExchangingBooster,
+        unstuck::Unstucking, use_booster::UsingBooster,
+    },
     rng::Rng,
     transition, transition_from_action, transition_if,
 };
@@ -202,6 +205,20 @@ fn update_from_action(resources: &Resources, player: &mut PlayerEntity, minimap_
 
         Some(PlayerAction::UseBooster(using)) => {
             transition!(player, Player::UsingBooster(UsingBooster::new(using.kind)))
+        }
+
+        Some(PlayerAction::ExchangeBooster(exchanging)) => {
+            transition!(
+                player,
+                Player::ExchangingBooster(ExchangingBooster::new(
+                    exchanging.amount,
+                    exchanging.all
+                ))
+            )
+        }
+
+        Some(PlayerAction::Unstuck) => {
+            transition!(player, Player::Unstucking(Unstucking::new_esc()))
         }
 
         None => (),

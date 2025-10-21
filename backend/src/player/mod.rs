@@ -27,7 +27,9 @@ use crate::{
     minimap::{Minimap, MinimapEntity},
     player::{
         chat::{Chatting, update_chatting_state},
+        exchange_booster::{ExchangingBooster, update_exchanging_booster_state},
         grapple::Grappling,
+        unstuck::Unstucking,
         use_booster::{UsingBooster, update_using_booster_state},
     },
     transition, transition_if,
@@ -38,6 +40,7 @@ mod adjust;
 mod cash_shop;
 mod chat;
 mod double_jump;
+mod exchange_booster;
 mod fall;
 mod familiars_swap;
 mod grapple;
@@ -100,7 +103,7 @@ pub enum Player {
         timeout_on_complete: bool,
     },
     /// Unstucks when inside non-detecting position or because of [`PlayerState::unstuck_counter`].
-    Unstucking(Timeout, bool),
+    Unstucking(Unstucking),
     /// Stalls for time and return to [`Player::Idle`] or [`PlayerState::stalling_timeout_state`].
     Stalling(Timeout, u32),
     /// Tries to solve a rune.
@@ -112,6 +115,7 @@ pub enum Player {
     Panicking(Panicking),
     Chatting(Chatting),
     UsingBooster(UsingBooster),
+    ExchangingBooster(ExchangingBooster),
 }
 
 impl Player {
@@ -148,13 +152,14 @@ impl Player {
             } => moving.completed,
             Player::SolvingRune(_)
             | Player::CashShopThenExit(_)
-            | Player::Unstucking(_, _)
+            | Player::Unstucking(_)
             | Player::DoubleJumping(DoubleJumping { forced: true, .. })
             | Player::UseKey(_)
             | Player::FamiliarsSwapping(_)
             | Player::Chatting(_)
             | Player::Panicking(_)
             | Player::UsingBooster(_)
+            | Player::ExchangingBooster(_)
             | Player::Stalling(_, _) => false,
         }
     }
@@ -204,10 +209,10 @@ pub fn run_system(
         };
         transition_if!(
             player,
-            Player::Unstucking(
+            Player::Unstucking(Unstucking::new_movement(
                 Timeout::default(),
                 player.context.track_unstucking_transitioned()
-            ),
+            )),
             is_stucking,
             {
                 player.context.last_known_direction = ActionKeyDirection::Any;
@@ -241,8 +246,8 @@ fn update_non_positional_state(
         Player::FamiliarsSwapping(_) => {
             update_familiars_swapping_state(resources, player);
         }
-        Player::Unstucking(timeout, gamba_mode) => {
-            update_unstucking_state(resources, player, minimap_state, timeout, gamba_mode);
+        Player::Unstucking(_) => {
+            update_unstucking_state(resources, player, minimap_state);
         }
         Player::Stalling(timeout, max_timeout) => {
             if failed_to_detect_player {
@@ -266,6 +271,7 @@ fn update_non_positional_state(
         }
         Player::Chatting(chatting) => update_chatting_state(resources, player, chatting),
         Player::UsingBooster(_) => update_using_booster_state(resources, player),
+        Player::ExchangingBooster(_) => update_exchanging_booster_state(resources, player),
         Player::Detecting
         | Player::Idle
         | Player::Moving(_, _, _)
@@ -302,13 +308,14 @@ fn update_positional_state(
         Player::Jumping(moving) => update_jumping_state(resources, player, moving),
         Player::Falling { .. } => update_falling_state(resources, player, minimap_state),
         Player::UseKey(_)
-        | Player::Unstucking(_, _)
+        | Player::Unstucking(_)
         | Player::Stalling(_, _)
         | Player::SolvingRune(_)
         | Player::FamiliarsSwapping(_)
         | Player::Panicking(_)
         | Player::Chatting(_)
         | Player::UsingBooster(_)
+        | Player::ExchangingBooster(_)
         | Player::CashShopThenExit(_) => unreachable!(),
     }
 }

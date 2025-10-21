@@ -178,6 +178,7 @@ pub enum KeyKind {
     Esc,
     Shift,
     Alt,
+    Backspace,
 }
 
 impl From<KeyBinding> for KeyKind {
@@ -253,6 +254,7 @@ impl From<KeyBinding> for KeyKind {
             KeyBinding::Shift => KeyKind::Shift,
             KeyBinding::Ctrl => KeyKind::Ctrl,
             KeyBinding::Alt => KeyKind::Alt,
+            KeyBinding::Backspace => KeyKind::Backspace,
         }
     }
 }
@@ -330,6 +332,7 @@ impl From<PlatformKeyKind> for KeyKind {
             PlatformKeyKind::Esc => KeyKind::Esc,
             PlatformKeyKind::Shift => KeyKind::Shift,
             PlatformKeyKind::Alt => KeyKind::Alt,
+            PlatformKeyKind::Backspace => KeyKind::Backspace,
         }
     }
 }
@@ -407,6 +410,7 @@ impl From<KeyKind> for PlatformKeyKind {
             KeyKind::Esc => PlatformKeyKind::Esc,
             KeyKind::Shift => PlatformKeyKind::Shift,
             KeyKind::Alt => PlatformKeyKind::Alt,
+            KeyKind::Backspace => PlatformKeyKind::Backspace,
         }
     }
 }
@@ -484,6 +488,7 @@ impl From<KeyKind> for RpcKeyKind {
             KeyKind::Esc => RpcKeyKind::Esc,
             KeyKind::Shift => RpcKeyKind::Shift,
             KeyKind::Alt => RpcKeyKind::Alt,
+            KeyKind::Backspace => RpcKeyKind::Backspace,
         }
     }
 }

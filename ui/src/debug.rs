@@ -1,6 +1,6 @@
 use backend::{
-    DebugState, auto_save_rune, capture_image, debug_state_receiver, infer_minimap, infer_rune,
-    record_images, test_spin_rune,
+    DebugState, auto_save_rune, debug_state_receiver, infer_minimap, infer_rune, record_images,
+    test_spin_rune,
 };
 use dioxus::prelude::*;
 use tokio::sync::broadcast::error::RecvError;
@@ -32,22 +32,6 @@ pub fn DebugScreen() -> Element {
         div { class: "flex flex-col h-full overflow-y-auto",
             Section { title: "Debug",
                 div { class: "grid grid-cols-2 gap-3",
-                    Button {
-                        style: ButtonStyle::Secondary,
-                        on_click: move |_| async {
-                            capture_image(false).await;
-                        },
-
-                        "Capture color image"
-                    }
-                    Button {
-                        style: ButtonStyle::Secondary,
-                        on_click: move |_| async {
-                            capture_image(true).await;
-                        },
-
-                        "Capture grayscale image"
-                    }
                     Button {
                         style: ButtonStyle::Secondary,
                         on_click: move |_| async {

@@ -2,7 +2,7 @@ use std::fs::{self};
 
 use backend::{
     GameTemplate, Localization, convert_image_to_base64, query_localization, query_template,
-    upsert_localization,
+    save_capture_image, upsert_localization,
 };
 use dioxus::prelude::*;
 use futures_util::{StreamExt, future::OptionFuture};
@@ -12,6 +12,7 @@ use crate::{
     AppState,
     components::{
         button::{Button, ButtonStyle},
+        labeled::Labeled,
         section::Section,
     },
 };
@@ -124,6 +125,22 @@ fn SectionInfo() -> Element {
                         Data { description: "Detect whether VIP/HEXA booster is in use." }
                         Data { description: "Timer text." }
                     }
+                }
+            }
+            div { class: "grid grid-cols-2 gap-3 mt-3",
+                Button {
+                    style: ButtonStyle::Primary,
+                    on_click: move |_| async move {
+                        save_capture_image(false).await;
+                    },
+                    "Capture color"
+                }
+                Button {
+                    style: ButtonStyle::Primary,
+                    on_click: move |_| async move {
+                        save_capture_image(true).await;
+                    },
+                    "Capture grayscale"
                 }
             }
         }
@@ -299,6 +316,7 @@ fn SectionOthers(
                 LocalizationTemplateInput {
                     label: "Change channel",
                     template: GameTemplate::ChangeChannel,
+                    tooltip: "This template is in grayscale.",
                     on_value: move |image: Option<Vec<u8>>| async move {
                         save_localization(Localization {
                             change_channel_base64: to_base64(image, true).await,
@@ -310,6 +328,7 @@ fn SectionOthers(
                 LocalizationTemplateInput {
                     label: "Timer",
                     template: GameTemplate::Timer,
+                    tooltip: "This template is in grayscale.",
                     on_value: move |image: Option<Vec<u8>>| async move {
                         save_localization(Localization {
                             timer_base64: to_base64(image, true).await,
@@ -327,6 +346,7 @@ fn SectionOthers(
 fn LocalizationTemplateInput(
     label: &'static str,
     template: GameTemplate,
+    #[props(default)] tooltip: Option<String>,
     on_value: EventHandler<Option<Vec<u8>>>,
     value: Option<String>,
 ) -> Element {
@@ -362,10 +382,7 @@ fn LocalizationTemplateInput(
     rsx! {
         div { class: "flex gap-2",
             div { class: "flex-grow",
-                div { class: "flex flex-col gap-1 w-full",
-                    label { class: "text-xxs text-secondary-text inline-block whitespace-nowrap overflow-hidden text-ellipsis",
-                        {label}
-                    }
+                Labeled { label, tooltip,
                     div { class: "h-6 border-b border-primary-border pb-0.5",
                         img {
                             src: format!("data:image/png;base64,{}", base64()),

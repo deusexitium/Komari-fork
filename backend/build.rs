@@ -80,6 +80,16 @@ fn main() {
     let vip_booster_number = dir.join("vip_booster_number_ideal_ratio.png");
     let hexa_vip_booster_number_mask = dir.join("hexa_vip_booster_number_mask_ideal_ratio.png");
 
+    let hexa_menu = dir.join("hexa_menu_ideal_ratio.png");
+    let hexa_quick_menu = dir.join("hexa_quick_menu_ideal_ratio.png");
+    let hexa_button_erda_conversion = dir.join("hexa_button_erda_conversion_ideal_ratio.png");
+    let hexa_button_hexa_booster = dir.join("hexa_button_hexa_booster_ideal_ratio.png");
+    let hexa_button_max = dir.join("hexa_button_max_ideal_ratio.png");
+    let hexa_button_convert = dir.join("hexa_button_convert_ideal_ratio.png");
+    let hexa_sol_erda = dir.join("hexa_sol_erda_ideal_ratio.png");
+    let hexa_sol_erda_full = dir.join("hexa_sol_erda_full_ideal_ratio.png");
+    let hexa_sol_erda_empty = dir.join("hexa_sol_erda_empty_ideal_ratio.png");
+
     let hp_bar_anchor = dir.join("hp_bar_anchor_ideal_ratio.png");
     let hp_separator = dir.join("hp_separator_ideal_ratio.png");
     let hp_shield = dir.join("hp_shield_ideal_ratio.png");
@@ -352,6 +362,43 @@ fn main() {
     println!(
         "cargo:rustc-env=HEXA_VIP_BOOSTER_NUMBER_MASK_TEMPLATE={}",
         hexa_vip_booster_number_mask.to_str().unwrap()
+    );
+
+    println!(
+        "cargo:rustc-env=HEXA_MENU_TEMPLATE={}",
+        hexa_menu.to_str().unwrap()
+    );
+    println!(
+        "cargo:rustc-env=HEXA_QUICK_MENU_TEMPLATE={}",
+        hexa_quick_menu.to_str().unwrap()
+    );
+    println!(
+        "cargo:rustc-env=HEXA_BUTTON_ERDA_CONVERSION_TEMPLATE={}",
+        hexa_button_erda_conversion.to_str().unwrap()
+    );
+    println!(
+        "cargo:rustc-env=HEXA_BUTTON_HEXA_BOOSTER_TEMPLATE={}",
+        hexa_button_hexa_booster.to_str().unwrap()
+    );
+    println!(
+        "cargo:rustc-env=HEXA_BUTTON_MAX_TEMPLATE={}",
+        hexa_button_max.to_str().unwrap()
+    );
+    println!(
+        "cargo:rustc-env=HEXA_BUTTON_CONVERT_TEMPLATE={}",
+        hexa_button_convert.to_str().unwrap()
+    );
+    println!(
+        "cargo:rustc-env=HEXA_SOL_ERDA_TEMPLATE={}",
+        hexa_sol_erda.to_str().unwrap()
+    );
+    println!(
+        "cargo:rustc-env=HEXA_SOL_ERDA_FULL_TEMPLATE={}",
+        hexa_sol_erda_full.to_str().unwrap()
+    );
+    println!(
+        "cargo:rustc-env=HEXA_SOL_ERDA_EMPTY_TEMPLATE={}",
+        hexa_sol_erda_empty.to_str().unwrap()
     );
 
     println!(

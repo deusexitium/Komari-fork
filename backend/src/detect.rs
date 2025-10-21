@@ -133,10 +133,16 @@ pub enum BuffKind {
 }
 
 #[derive(Debug)]
-pub enum BoosterState {
+pub enum QuickSlotsBooster {
     Available,
     Unavailable,
-    NotInQuickSlots,
+}
+
+#[derive(Debug)]
+pub enum SolErda {
+    Full,
+    AtLeastOne,
+    Empty,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -281,8 +287,20 @@ pub trait Detector: 'static + Send + DynClone + Debug {
     /// Detects whether there is a timer (e.g. from using booster).
     fn detect_timer_visible(&self) -> bool;
 
-    /// Detects whether the state for VIP Booster in the quick slots.
-    fn detect_booster(&self, kind: BoosterKind) -> BoosterState;
+    /// Detects the state for HEXA/VIP Booster in the quick slots.
+    fn detect_quick_slots_booster(&self, kind: BoosterKind) -> Result<QuickSlotsBooster>;
+
+    fn detect_hexa_quick_menu(&self) -> Result<Rect>;
+
+    fn detect_hexa_erda_conversion_button(&self) -> Result<Rect>;
+
+    fn detect_hexa_booster_button(&self) -> Result<Rect>;
+
+    fn detect_hexa_max_button(&self) -> Result<Rect>;
+
+    fn detect_hexa_convert_button(&self) -> Result<Rect>;
+
+    fn detect_hexa_sol_erda(&self) -> Result<SolErda>;
 }
 
 #[cfg(test)]
@@ -336,7 +354,13 @@ mock! {
         fn detect_chat_menu_opened(&self) -> bool;
         fn detect_admin_visible(&self) -> bool;
         fn detect_timer_visible(&self) -> bool;
-        fn detect_booster(&self, kind: BoosterKind) -> BoosterState;
+        fn detect_quick_slots_booster(&self, kind: BoosterKind) -> Result<QuickSlotsBooster>;
+        fn detect_hexa_quick_menu(&self) -> Result<Rect>;
+        fn detect_hexa_erda_conversion_button(&self) -> Result<Rect>;
+        fn detect_hexa_booster_button(&self) -> Result<Rect>;
+        fn detect_hexa_max_button(&self) -> Result<Rect>;
+        fn detect_hexa_convert_button(&self) -> Result<Rect>;
+        fn detect_hexa_sol_erda(&self) -> Result<SolErda>;
     }
 
     impl Debug for Detector {
@@ -565,8 +589,32 @@ impl Detector for DefaultDetector {
         detect_timer_visible(&**self.grayscale, &self.localization)
     }
 
-    fn detect_booster(&self, kind: BoosterKind) -> BoosterState {
+    fn detect_quick_slots_booster(&self, kind: BoosterKind) -> Result<QuickSlotsBooster> {
         detect_booster(&to_quick_slots_region(&**self.grayscale).0, kind)
+    }
+
+    fn detect_hexa_quick_menu(&self) -> Result<Rect> {
+        detect_hexa_quick_menu(&**self.grayscale)
+    }
+
+    fn detect_hexa_erda_conversion_button(&self) -> Result<Rect> {
+        detect_hexa_erda_conversion_button(&to_bgr(&*self.mat))
+    }
+
+    fn detect_hexa_booster_button(&self) -> Result<Rect> {
+        detect_hexa_booster_button(&to_bgr(&*self.mat))
+    }
+
+    fn detect_hexa_max_button(&self) -> Result<Rect> {
+        detect_hexa_max_button(&to_bgr(&*self.mat))
+    }
+
+    fn detect_hexa_convert_button(&self) -> Result<Rect> {
+        detect_hexa_convert_button(&to_bgr(&*self.mat))
+    }
+
+    fn detect_hexa_sol_erda(&self) -> Result<SolErda> {
+        detect_hexa_sol_erda(&to_bgr(&*self.mat))
     }
 }
 
@@ -762,6 +810,9 @@ fn detect_esc_settings(mat: &impl ToInputArray, localization: &Localization) -> 
         return true;
     }
     if detect_popup_cancel_old_button(mat, localization).is_ok() {
+        return true;
+    }
+    if detect_hexa_menu(mat) {
         return true;
     }
 
@@ -2505,7 +2556,10 @@ fn detect_timer_visible(mat: &impl ToInputArray, localization: &Localization) ->
     .is_ok()
 }
 
-fn detect_booster<T: MatTraitConst + ToInputArray>(mat: &T, kind: BoosterKind) -> BoosterState {
+fn detect_booster<T: MatTraitConst + ToInputArray>(
+    mat: &T,
+    kind: BoosterKind,
+) -> Result<QuickSlotsBooster> {
     static HEXA_TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
         imgcodecs::imdecode(
             include_bytes!(env!("HEXA_BOOSTER_TEMPLATE")),
@@ -2555,7 +2609,7 @@ fn detect_booster<T: MatTraitConst + ToInputArray>(mat: &T, kind: BoosterKind) -
         ),
     };
     let pad_height = template_number.size().unwrap().height;
-    let Ok(booster_bbox) = detect_template(mat, template, Point::default(), 0.75).map(|bbox| {
+    let booster_bbox = detect_template(mat, template, Point::default(), 0.75).map(|bbox| {
         let br = bbox.br();
 
         let x1 = bbox.x - 1;
@@ -2565,9 +2619,7 @@ fn detect_booster<T: MatTraitConst + ToInputArray>(mat: &T, kind: BoosterKind) -
         let y2 = br.y + pad_height;
 
         Rect::new(x1, y1, x2 - x1, y2 - y1)
-    }) else {
-        return BoosterState::NotInQuickSlots;
-    };
+    })?;
     let booster = mat.roi(booster_bbox).expect("can extract roi");
     let has_booster = detect_template_single(
         &booster,
@@ -2579,10 +2631,112 @@ fn detect_booster<T: MatTraitConst + ToInputArray>(mat: &T, kind: BoosterKind) -
     .is_err();
 
     if has_booster {
-        BoosterState::Available
+        Ok(QuickSlotsBooster::Available)
     } else {
-        BoosterState::Unavailable
+        Ok(QuickSlotsBooster::Unavailable)
     }
+}
+
+fn detect_hexa_menu(mat: &impl ToInputArray) -> bool {
+    static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(include_bytes!(env!("HEXA_MENU_TEMPLATE")), IMREAD_GRAYSCALE).unwrap()
+    });
+
+    detect_template(mat, &*TEMPLATE, Point::default(), 0.75).is_ok()
+}
+
+fn detect_hexa_quick_menu(mat: &impl ToInputArray) -> Result<Rect> {
+    static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(
+            include_bytes!(env!("HEXA_QUICK_MENU_TEMPLATE")),
+            IMREAD_GRAYSCALE,
+        )
+        .unwrap()
+    });
+
+    detect_template(mat, &*TEMPLATE, Point::default(), 0.75)
+}
+
+fn detect_hexa_erda_conversion_button(mat: &impl ToInputArray) -> Result<Rect> {
+    static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(
+            include_bytes!(env!("HEXA_BUTTON_ERDA_CONVERSION_TEMPLATE")),
+            IMREAD_COLOR,
+        )
+        .unwrap()
+    });
+
+    detect_template(mat, &*TEMPLATE, Point::default(), 0.75)
+}
+
+fn detect_hexa_booster_button(mat: &impl ToInputArray) -> Result<Rect> {
+    static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(
+            include_bytes!(env!("HEXA_BUTTON_HEXA_BOOSTER_TEMPLATE")),
+            IMREAD_COLOR,
+        )
+        .unwrap()
+    });
+
+    detect_template(mat, &*TEMPLATE, Point::default(), 0.75)
+}
+
+fn detect_hexa_max_button(mat: &impl ToInputArray) -> Result<Rect> {
+    static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(
+            include_bytes!(env!("HEXA_BUTTON_MAX_TEMPLATE")),
+            IMREAD_COLOR,
+        )
+        .unwrap()
+    });
+
+    detect_template(mat, &*TEMPLATE, Point::default(), 0.75)
+}
+
+fn detect_hexa_convert_button(mat: &impl ToInputArray) -> Result<Rect> {
+    static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(
+            include_bytes!(env!("HEXA_BUTTON_CONVERT_TEMPLATE")),
+            IMREAD_COLOR,
+        )
+        .unwrap()
+    });
+
+    detect_template(mat, &*TEMPLATE, Point::default(), 0.75)
+}
+
+fn detect_hexa_sol_erda(mat: &impl ToInputArray) -> Result<SolErda> {
+    static TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(include_bytes!(env!("HEXA_SOL_ERDA_TEMPLATE")), IMREAD_COLOR).unwrap()
+    });
+    static FULL_TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(
+            include_bytes!(env!("HEXA_SOL_ERDA_FULL_TEMPLATE")),
+            IMREAD_COLOR,
+        )
+        .unwrap()
+    });
+    static EMPTY_TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
+        imgcodecs::imdecode(
+            include_bytes!(env!("HEXA_SOL_ERDA_FULL_TEMPLATE")),
+            IMREAD_COLOR,
+        )
+        .unwrap()
+    });
+
+    if detect_template(mat, &*FULL_TEMPLATE, Point::default(), 0.75).is_ok() {
+        return Ok(SolErda::Full);
+    }
+
+    if detect_template(mat, &*EMPTY_TEMPLATE, Point::default(), 0.75).is_ok() {
+        return Ok(SolErda::Empty);
+    }
+
+    if detect_template(mat, &*TEMPLATE, Point::default(), 0.75).is_ok() {
+        return Ok(SolErda::AtLeastOne);
+    };
+
+    bail!("sol erda tracker menu not visible")
 }
 
 /// Detects a single match from `template` with the given BGR image `Mat`.

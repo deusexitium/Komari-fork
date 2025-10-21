@@ -73,6 +73,7 @@ enum Key {
     Esc = 67;
     Shift = 68;
     Alt = 69;
+    Backspace = 70;
 }
 
 enum KeyState {

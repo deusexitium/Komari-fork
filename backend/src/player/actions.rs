@@ -184,6 +184,12 @@ pub struct UseBooster {
     pub kind: Booster,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ExchangeBooster {
+    pub amount: u32,
+    pub all: bool,
+}
+
 /// Represents an action the [`Rotator`] can use.
 #[derive(Clone, Debug, Display)]
 pub enum PlayerAction {
@@ -206,6 +212,10 @@ pub enum PlayerAction {
     Chat(Chat),
     /// Use VIP or HEXA booster action.
     UseBooster(UseBooster),
+    /// Exchange HEXA booster action.
+    ExchangeBooster(ExchangeBooster),
+    /// Unstucking by pressing ESC.
+    Unstuck,
 }
 
 impl From<Action> for PlayerAction {

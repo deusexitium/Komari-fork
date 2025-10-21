@@ -91,6 +91,7 @@ pub enum KeyKind {
     Esc,
     Shift,
     Alt,
+    Backspace,
 }
 
 /// Kind of input to send.
