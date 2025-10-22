@@ -289,10 +289,21 @@ impl DefaultRotator {
 
         fn resolve_conflict_from_metadata(
             rotator: &DefaultRotator,
+            player_context: &PlayerContext,
             metadata: ActionMetadata,
         ) -> ResolveConflict {
             match metadata {
                 ActionMetadata::UseBooster => {
+                    if player_context
+                        .priority_action_id()
+                        .and_then(|id| rotator.priority_actions.get(&id))
+                        .and_then(|action| action.metadata)
+                        .is_some_and(|metadata| matches!(metadata, ActionMetadata::UseBooster))
+                    {
+                        info!(target: "rotator", "ignored booster usage due to conflict with another booster kind");
+                        return ResolveConflict::Ignore;
+                    }
+
                     for id in rotator.priority_actions_queue.iter() {
                         let action = rotator.priority_actions.get(id).expect("exists");
                         if matches!(action.metadata, Some(ActionMetadata::UseBooster)) {
@@ -362,7 +373,7 @@ impl DefaultRotator {
             match result {
                 ConditionResult::Queue => {
                     let conflict = if let Some(metadata) = action.metadata {
-                        resolve_conflict_from_metadata(self, metadata)
+                        resolve_conflict_from_metadata(self, &world.player.context, metadata)
                     } else {
                         ResolveConflict::None
                     };
