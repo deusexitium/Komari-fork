@@ -218,13 +218,13 @@ fn update_exchanging(resources: &Resources, exchanging: &mut ExchangingBooster) 
         panic!("exchanging booster state is not exchanging")
     };
     let amount = exchanging.amount;
-    let max_timeout = if amount.is_none() { 20 } else { 60 };
+    let max_timeout = if amount.is_some() { 60 } else { 20 };
 
     match next_timeout_lifecycle(timeout, max_timeout) {
         Lifecycle::Started(timeout) => {
             transition!(exchanging, State::Exchanging(timeout, bbox), {
                 let (mut x, y) = bbox_click_point(bbox);
-                if amount.is_none() {
+                if amount.is_some() {
                     x += 100; // Clicking the input box
                 }
 
@@ -463,11 +463,11 @@ mod tests {
     }
 
     #[test]
-    fn update_exchanging_no_amount_clicks_input_box() {
+    fn update_exchanging_no_amount_clicks_max() {
         let mut input = MockInput::default();
         input
             .expect_send_mouse()
-            .with(eq(135), eq(15), eq(MouseKind::Click))
+            .with(eq(35), eq(15), eq(MouseKind::Click))
             .once();
         let resources = Resources::new(Some(input), None);
 
