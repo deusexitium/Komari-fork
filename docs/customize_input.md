@@ -13,11 +13,6 @@ This approach requires some scripting and setup:
 
 ![Customize Input](https://github.com/sasanquaa/komari/blob/master/.github/images/customize_input.png?raw=true)
 
-<details>
-<summary><b>Personal experience</b></summary>
-From my own testing of using both input methods, I currently believe there is no real difference in ban risk between them. However, <b>hardware-based input generally results in fewer spinning runes and color runes</b> compared to the default software-based input. That said, this is just my own opinion — please use whichever method feels right for you.
-</details>
-
 ## Key States
 
 Introduced in **v0.20**.
