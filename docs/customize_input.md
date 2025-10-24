@@ -18,7 +18,15 @@ This approach requires some scripting and setup:
 Introduced in **v0.20**.
 
 The `KeyState` function is required to let the bot knows if a key is currently pressed or released. This helps improve
-some of the bot behaviors. For example, waits for all key to be released before solving rune. 
+some of the bot behaviors. For example, waits for all keys to be released before solving rune. 
+
+```python
+def KeyState(self, request: KeyStateRequest, context):
+    if is_key_pressed(request.key):
+        return KeyStateResponse(KeyState.Pressed)
+    else:
+        return KeyStateResponse(KeyState.Released)
+```
 
 ## Random Delay
 
@@ -49,7 +57,8 @@ Two coordinate modes are supported:
 In your `Init()` function, return the coordinate mode that matches your setup:
 
 ```python
-return KeyInitResponse(mouse_coordinate=Coordinate.Relative)
+def Init(self, request: KeyInitRequest, context):
+    return KeyInitResponse(mouse_coordinate=Coordinate.Relative)
 ```
 
 Mouse input coordinates sent by the bot should be transformed to match your local input system (e.g., KMBox, SendInput):
