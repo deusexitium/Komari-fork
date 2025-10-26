@@ -838,6 +838,46 @@ impl Rotator for DefaultRotator {
         self.normal_actions_reset_on_erda = enable_reset_normal_actions_on_erda;
         self.priority_actions.clear();
 
+        // Low priority
+        if enable_using_vip_booster {
+            self.priority_actions
+                .insert(next_action_id(), use_booster_priority_action(Booster::Vip));
+        }
+
+        if enable_using_hexa_booster {
+            self.priority_actions
+                .insert(next_action_id(), use_booster_priority_action(Booster::Hexa));
+        }
+
+        if !matches!(
+            hexa_booster_exchange_condition,
+            ExchangeHexaBoosterCondition::None
+        ) {
+            self.priority_actions.insert(
+                next_action_id(),
+                exchange_hexa_booster_priority_action(
+                    hexa_booster_exchange_condition,
+                    hexa_booster_exchange_amount,
+                    hexa_booster_exchange_all,
+                ),
+            );
+        }
+
+        if enable_familiars_swapping {
+            self.priority_actions.insert(
+                next_action_id(),
+                priority_action(
+                    RotatorAction::Single(PlayerAction::FamiliarsSwap(FamiliarsSwap {
+                        swappable_slots: familiar_swappable_slots,
+                        swappable_rarities: Array::from_iter(familiar_swappable_rarities.clone()),
+                    })),
+                    ActionCondition::EveryMillis(familiar_swap_check_millis),
+                    true,
+                ),
+            );
+        }
+
+        // Mid priority
         let mut i = 0;
         while i < actions.len() {
             let action = actions[i];
@@ -868,19 +908,12 @@ impl Rotator for DefaultRotator {
             }
         }
 
-        if buffs
-            .iter()
-            .any(|(buff, _)| matches!(buff, BuffKind::Familiar))
-        {
-            self.priority_actions.insert(
-                next_action_id(),
-                familiar_essence_replenish_priority_action(familiar_essence_key),
-            );
-        }
+        // High priority
         if enable_rune_solving {
             self.priority_actions
                 .insert(next_action_id(), solve_rune_priority_action());
         }
+
         match elite_boss_behavior {
             EliteBossBehavior::None => (),
             EliteBossBehavior::CycleChannel => {
@@ -896,45 +929,21 @@ impl Rotator for DefaultRotator {
                 );
             }
         }
-        if enable_familiars_swapping {
-            self.priority_actions.insert(
-                next_action_id(),
-                priority_action(
-                    RotatorAction::Single(PlayerAction::FamiliarsSwap(FamiliarsSwap {
-                        swappable_slots: familiar_swappable_slots,
-                        swappable_rarities: Array::from_iter(familiar_swappable_rarities.clone()),
-                    })),
-                    ActionCondition::EveryMillis(familiar_swap_check_millis),
-                    true,
-                ),
-            );
-        }
+
         if enable_panic_mode {
             self.priority_actions
                 .insert(next_action_id(), panic_priority_action());
         }
-        if enable_using_vip_booster {
-            self.priority_actions
-                .insert(next_action_id(), use_booster_priority_action(Booster::Vip));
-        }
-        if enable_using_hexa_booster {
-            self.priority_actions
-                .insert(next_action_id(), use_booster_priority_action(Booster::Hexa));
-        }
-        if !matches!(
-            hexa_booster_exchange_condition,
-            ExchangeHexaBoosterCondition::None
-        ) {
+
+        if buffs
+            .iter()
+            .any(|(buff, _)| matches!(buff, BuffKind::Familiar))
+        {
             self.priority_actions.insert(
                 next_action_id(),
-                exchange_hexa_booster_priority_action(
-                    hexa_booster_exchange_condition,
-                    hexa_booster_exchange_amount,
-                    hexa_booster_exchange_all,
-                ),
+                familiar_essence_replenish_priority_action(familiar_essence_key),
             );
         }
-
         for (i, key) in buffs.iter().copied() {
             self.priority_actions
                 .insert(next_action_id(), buff_priority_action(i, key));
@@ -1444,8 +1453,13 @@ fn exchange_hexa_booster_priority_action(
 #[inline]
 fn unstuck_priority_action() -> PriorityAction {
     let mut task: Option<Task<Result<bool>>> = None;
-    let task_fn =
-        move |detector: Arc<dyn Detector>| -> Result<bool> { Ok(detector.detect_esc_settings()) };
+    let task_fn = move |detector: Arc<dyn Detector>| -> Result<bool> {
+        if detector.detect_player_is_dead() {
+            return Ok(false);
+        }
+
+        Ok(detector.detect_esc_settings())
+    };
 
     PriorityAction {
         condition: Condition(Box::new(move |resources, world, info| {
@@ -1457,11 +1471,11 @@ fn unstuck_priority_action() -> PriorityAction {
                 return ConditionResult::Skip;
             }
 
-            if world.player.context.is_dead() {
+            if resources.detector.is_none() {
                 return ConditionResult::Skip;
             }
 
-            if resources.detector.is_none() {
+            if world.player.context.is_dead() {
                 return ConditionResult::Skip;
             }
 
@@ -2101,6 +2115,7 @@ mod tests {
             None,
             Some(mock_detector(|detector| {
                 detector.expect_detect_esc_settings().returning(|| true);
+                detector.expect_detect_player_is_dead().returning(|| false);
             })),
         );
         let world = mock_world();
