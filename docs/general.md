@@ -20,6 +20,8 @@
   - [Panic Mode](#panic-mode)
   - [Elite Boss Spawns Behavior](#elite-boss-spawns-behavior)
   - [Control and Notifications](#control-and-notifications)
+  - [Localization](#localization)
+  - [VIP/HEXA Booster](#vip-hexa-booster)
 - [Video Guides](#video-guides)
 - [Showcase](#showcase)
   - [Rotation](#rotation)
@@ -432,15 +434,57 @@ Introduced in **v0.20**.
 
 ### Localization
 
+Introduced in **v0.22**.
+
 This feature helps replace certain detection resources that may differ across game regions.
 
 How to use:
-1. Open the `Localization` tab and refer to the table to find the function corresponding to each template.  
-2. Make sure the matching UI element is currently visible in your game.  
-3. Identify whether the template to replace is **color** or **grayscale**.  
-4. Click `Capture color` or `Capture grayscale`, depending on the template type.  
-5. Open the `datasets` folder (located in the same directory as the `.exe` file).  
-6. Crop the captured image to match the template, then click `Replace` button.  
+1. Opens the `Localization` tab and refer to the table to find the function corresponding to each template.  
+2. Makes sure the matching UI element is currently visible in your game.  
+3. Identifies whether the template to replace is **color** or **grayscale**.  
+4. Clicks `Capture color` or `Capture grayscale`, depending on the template type.  
+5. Opens the `datasets` folder (located in the same directory as the `.exe` file).  
+6. Crops the captured image to match the template, then click `Replace` button.  
+
+---
+
+### VIP/HEXA Booster
+
+Introduced in **v0.22**
+
+The VIP and HEXA Boosters can be accessed under `Characters → Use booster`.
+
+Each booster type (VIP or HEXA) can be enabled independently. For the feature to function properly, the assigned booster must be assigned to a visible quick slot — similar to the `Erda Shower` skill setup.
+
+How the bot uses:
+1. Detects the VIP/HEXA Booster in the quick slots.  
+2. Checks if at least one booster is available.  
+3. Attempts to use the booster.  
+4. If successful, repeats from step 1.  
+5. If the bot fails 5 consecutive attempts or no booster is available, it stops attempting to use boosters.
+
+#### HEXA Booster Exchange
+
+To enable automatic HEXA Booster exchange, the following setup is required:
+
+- HEXA Booster is assigned to a visible quick slot.  
+- The Sol Erda tracker menu is open and visible on screen.  
+- The HEXA Matrix is assigned to a quick menu and visible.
+
+There are three condition types for automatic exchange:
+
+- `None` — Disabled; no exchange occurs.  
+- `Full` — Exchanges only when Sol Erda is full.  
+- `AtLeastOne` — Exchanges when at least one Sol Erda is available.
+
+You can configure the amount to exchange using the `Amount` input field or by enabling the `Exchange all` checkbox.
+
+> **Note:**  
+> Automatic exchange will only occur when:
+> - No HEXA Booster is currently available, **and**  
+> - Sol Erda matches the selected exchange condition.
+
+![HEXA Booster Exchange](https://github.com/sasanquaa/komari/blob/master/.github/images/hexa_booster_exchange.png?raw=true)
 
 
 ## Video Guides
