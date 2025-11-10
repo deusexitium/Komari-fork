@@ -26,13 +26,13 @@ env:
   OPENCV_MSVC_CRT: static
   OPENCV_DISABLE_PROBES: environment,pkg_config,cmake,vcpkg_cmake
 
-  VCPKG_VERSION: "2025.04.09"
+  VCPKG_VERSION: "2025.10.17"
   VCPKG_ENABLE_METRICS: 0
   VCPKG_ROOT: ${{ github.workspace }}/vcpkg
   VCPKG_INSTALLED_DIR: ${{ github.workspace }}/vcpkg/installed
   VCPKGRS_TRIPLET: x64-windows-static
 
-  PROTOC_VERSION: "31.1.0"
+  PROTOC_VERSION: "33.0.0"
   CARGO_TERM_COLOR: always
   SCCACHE_GHA_ENABLED: "true"
   RUST_BACKTRACE: 1
