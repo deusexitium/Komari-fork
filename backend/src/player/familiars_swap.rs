@@ -27,8 +27,6 @@ const MAX_RETRY: u32 = 3;
 enum State {
     /// Opening the familiar menu.
     OpenMenu(Timeout, u32),
-    /// Clicking on the "Setup" tab in the familiar UI.
-    OpenSetup(Timeout, u32),
     /// Find the familiar slots.
     FindSlots,
     /// Check if slot is free or occupied to release the slot.
@@ -67,7 +65,6 @@ impl Display for FamiliarsSwapping {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.state {
             State::OpenMenu(_, _) => write!(f, "Opening"),
-            State::OpenSetup(_, _) => write!(f, "Opening Setup"),
             State::FindSlots => write!(f, "Find Slots"),
             State::FreeSlots(_, _) | State::FreeSlot(_, _) => {
                 write!(f, "Freeing Slots")
@@ -117,7 +114,6 @@ pub fn update_familiars_swapping_state(resources: &Resources, player: &mut Playe
 
     match swapping.state {
         State::OpenMenu(_, _) => update_open_menu(resources, &mut swapping, familiar_key),
-        State::OpenSetup(_, _) => update_open_setup(resources, &mut swapping),
         State::FindSlots => update_find_slots(resources, &mut swapping),
         State::FreeSlots(_, _) => update_free_slots(resources, &mut swapping),
         State::FreeSlot(_, _) => update_free_slot(resources, &mut swapping),
@@ -156,7 +152,7 @@ fn update_open_menu(resources: &Resources, swapping: &mut FamiliarsSwapping, key
             );
             transition_if!(
                 swapping,
-                State::OpenSetup(Timeout::default(), 0),
+                State::FindSlots,
                 resources.detector().detect_familiar_menu_opened()
             );
             transition_if!(
@@ -172,53 +168,6 @@ fn update_open_menu(resources: &Resources, swapping: &mut FamiliarsSwapping, key
         Lifecycle::Ended => transition!(swapping, State::OpenMenu(Timeout::default(), retry_count)),
         Lifecycle::Updated(timeout) => {
             transition!(swapping, State::OpenMenu(timeout, retry_count))
-        }
-    }
-}
-
-fn update_open_setup(resources: &Resources, swapping: &mut FamiliarsSwapping) {
-    const OPEN_SETUP_TIMEOUT: u32 = 10;
-
-    let State::OpenSetup(timeout, retry_count) = swapping.state else {
-        panic!("familiars swapping state is not opening setup");
-    };
-
-    match next_timeout_lifecycle(timeout, OPEN_SETUP_TIMEOUT) {
-        Lifecycle::Started(timeout) => {
-            transition!(swapping, State::OpenSetup(timeout, retry_count), {
-                // Try click familiar menu setup button every one second until it becomes
-                // undetectable
-                if let Ok(bbox) = resources.detector().detect_familiar_setup_button() {
-                    let (x, y) = bbox_click_point(bbox);
-                    resources.input.send_mouse(x, y, MouseKind::Click);
-                    swapping.mouse_rest = Point::new(bbox.x, bbox.y - 100);
-                }
-            })
-        }
-        Lifecycle::Ended => {
-            // This could also indicate familiar menu already closed. If that is the case,
-            // find slots will handle it. And send to mouse rest position for detecting slots.
-            transition_if!(
-                swapping,
-                State::FindSlots,
-                resources.detector().detect_familiar_setup_button().is_err(),
-                {
-                    resources.input.send_mouse(
-                        swapping.mouse_rest.x,
-                        swapping.mouse_rest.y,
-                        MouseKind::Move,
-                    );
-                }
-            );
-            transition_if!(
-                swapping,
-                State::OpenSetup(Timeout::default(), retry_count + 1),
-                State::Completing(Timeout::default(), false),
-                retry_count < MAX_RETRY
-            );
-        }
-        Lifecycle::Updated(timeout) => {
-            transition!(swapping, State::OpenSetup(timeout, retry_count))
         }
     }
 }
@@ -483,10 +432,9 @@ fn update_swapping(resources: &Resources, swapping: &mut FamiliarsSwapping) {
                         resources.input.send_mouse(rest.x, rest.y, MouseKind::Move);
                     }
                     Ok(FamiliarLevel::LevelOther) => {
-                        // Double click to select and then move to rest point
+                        // Click to select and then move to rest point
                         let bbox = swapping.cards[index];
                         let (x, y) = bbox_click_point(bbox);
-                        resources.input.send_mouse(x, y, MouseKind::Click);
                         resources.input.send_mouse(x, y, MouseKind::Click);
                         resources.input.send_mouse(rest.x, rest.y, MouseKind::Move);
                     }
@@ -829,8 +777,8 @@ mod tests {
     #[test]
     fn update_swapping_detect_level_other_double_click_and_move_to_rest() {
         let mut keys = MockInput::default();
-        // Move (start), Click, Click, Move to rest = total 3 send_mouse calls in Updated branch
-        keys.expect_send_mouse().times(3);
+        // Move (start), Click, Move to rest = total 2 send_mouse calls in Updated branch
+        keys.expect_send_mouse().times(2);
         let mut detector = MockDetector::default();
         detector
             .expect_detect_familiar_hover_level()

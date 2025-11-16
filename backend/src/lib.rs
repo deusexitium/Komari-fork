@@ -237,7 +237,6 @@ pub enum GameTemplate {
     PopupCancelOld,
     FamiliarsLevelSort,
     FamiliarsSaveButton,
-    FamiliarsSetupButton,
     HexaErdaConversionButton,
     HexaBoosterButton,
     HexaMaxButton,

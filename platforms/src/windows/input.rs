@@ -178,7 +178,7 @@ impl WindowsInput {
                 send_input(mouse_input(dx, dy, base_flags | MOUSEEVENTF_LEFTUP, 0))
             }
             MouseKind::Scroll => {
-                send_input(mouse_input(dx, dy, base_flags | MOUSEEVENTF_WHEEL, -300))
+                send_input(mouse_input(dx, dy, base_flags | MOUSEEVENTF_WHEEL, -150))
             }
         }
     }

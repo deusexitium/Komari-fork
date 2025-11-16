@@ -382,12 +382,24 @@ fn update_idle_state(
 #[inline]
 fn anchor_match(anchor: Vec4b, pixel: Vec4b) -> bool {
     const ANCHOR_ACCEPTABLE_ERROR_RANGE: u32 = 45;
+    const DARKEN_RATIO_THRESHOLD: f32 = 0.5;
 
     let b = anchor[0].abs_diff(pixel[0]) as u32;
     let g = anchor[1].abs_diff(pixel[1]) as u32;
     let r = anchor[2].abs_diff(pixel[2]) as u32;
     let avg = (b + g + r) / 3; // Average for grayscale
-    avg <= ANCHOR_ACCEPTABLE_ERROR_RANGE
+    if avg <= ANCHOR_ACCEPTABLE_ERROR_RANGE {
+        return true;
+    }
+
+    let anchor_grayscale = (anchor[0] as u32 + anchor[1] as u32 + anchor[2] as u32) / 3;
+    let pixel_grayscale = (pixel[0] as u32 + pixel[1] as u32 + pixel[2] as u32) / 3;
+    if anchor_grayscale == 0 {
+        return false;
+    }
+
+    let ratio = pixel_grayscale as f32 / anchor_grayscale as f32;
+    ratio > DARKEN_RATIO_THRESHOLD
 }
 
 #[inline]

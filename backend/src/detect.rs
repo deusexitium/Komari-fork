@@ -248,9 +248,6 @@ pub trait Detector: Debug + Send + Sync {
     /// Detects familiar menu save button.
     fn detect_familiar_save_button(&self) -> Result<Rect>;
 
-    /// Detects familiar menu setup button.
-    fn detect_familiar_setup_button(&self) -> Result<Rect>;
-
     /// Detects familiar menu level button.
     fn detect_familiar_level_button(&self) -> Result<Rect>;
 
@@ -478,10 +475,6 @@ impl Detector for DefaultDetector {
 
     fn detect_familiar_save_button(&self) -> Result<Rect> {
         detect_familiar_save_button(self.bgr(), &self.localization)
-    }
-
-    fn detect_familiar_setup_button(&self) -> Result<Rect> {
-        detect_familiar_setup_button(self.bgr(), &self.localization)
     }
 
     fn detect_familiar_level_button(&self) -> Result<Rect> {
@@ -2217,33 +2210,6 @@ fn detect_familiar_save_button(
     )
 }
 
-pub static FAMILIAR_SETUP_BUTTON_TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
-    imgcodecs::imdecode(
-        include_bytes!(env!("FAMILIAR_BUTTON_SETUP_TEMPLATE")),
-        IMREAD_COLOR,
-    )
-    .unwrap()
-});
-
-fn detect_familiar_setup_button(
-    bgr: &impl ToInputArray,
-    localization: &Localization,
-) -> Result<Rect> {
-    let template = localization
-        .familiar_setup_button_base64
-        .as_ref()
-        .and_then(|base64| to_mat_from_base64(base64, false).ok());
-
-    detect_template(
-        bgr,
-        template
-            .as_ref()
-            .unwrap_or(&*FAMILIAR_SETUP_BUTTON_TEMPLATE),
-        Point::default(),
-        0.75,
-    )
-}
-
 pub static FAMILIAR_LEVEL_BUTTON_TEMPLATE: LazyLock<Mat> = LazyLock::new(|| {
     imgcodecs::imdecode(
         include_bytes!(env!("FAMILIAR_BUTTON_LEVEL_TEMPLATE")),
@@ -2343,7 +2309,7 @@ fn detect_familiar_hover_level<T: ToInputArray + MatTraitConst>(bgr: &T) -> Resu
         .unwrap()
     });
 
-    let level_bbox = detect_template(bgr, &*TEMPLATE, Point::default(), 0.75)?;
+    let level_bbox = detect_template(bgr, &*TEMPLATE, Point::default(), 0.65)?;
     let level = bgr.roi(level_bbox)?;
     Ok(
         detect_template_single(&level, &*TEMPLATE, &*TEMPLATE_MASK, Point::default(), 0.70)

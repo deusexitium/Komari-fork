@@ -371,17 +371,6 @@ fn SectionFamiliars() -> Element {
                     },
                     value: localization().familiar_save_button_base64,
                 }
-                LocalizationTemplateInput {
-                    label: "Setup button (unselected)",
-                    template: GameTemplate::FamiliarsSetupButton,
-                    on_value: move |image: Option<Vec<u8>>| async move {
-                        save_localization(Localization {
-                            familiar_setup_button_base64: to_base64(image, false).await,
-                            ..localization()
-                        });
-                    },
-                    value: localization().familiar_setup_button_base64,
-                }
             }
         }
     }

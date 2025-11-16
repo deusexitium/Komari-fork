@@ -19,7 +19,6 @@ pub struct Localization {
     pub popup_cancel_old_base64: Option<String>,
     pub familiar_level_button_base64: Option<String>,
     pub familiar_save_button_base64: Option<String>,
-    pub familiar_setup_button_base64: Option<String>,
     pub hexa_convert_button_base64: Option<String>,
     pub hexa_erda_conversion_button_base64: Option<String>,
     pub hexa_booster_button_base64: Option<String>,
